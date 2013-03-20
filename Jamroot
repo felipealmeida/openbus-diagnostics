@@ -1,0 +1,11 @@
+
+project openbus-diagnostics
+ : default-build <link>static
+ ;
+
+exe openbus-diagnostics
+ : src/main.cpp /boost//program_options /boost//system /morbid//iiop
+ : <threading>multi
+ ;
+
+install stage : openbus-diagnostics ;
