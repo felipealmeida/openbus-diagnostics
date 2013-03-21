@@ -11,14 +11,25 @@
 #include <morbid/giop/grammars/reply_1_0.hpp>
 #include <morbid/giop/grammars/system_exception_reply_body.hpp>
 #include <morbid/iiop/all.hpp>
+#include <morbid/iiop/grammars/profile_body_1_1.hpp>
+#include <morbid/iiop/profile_body.hpp>
+
+#include <morbid/ior/grammar/generic_tagged_profile.hpp>
+#include <morbid/ior/grammar/tagged_profile.hpp>
+#include <morbid/ior/grammar/ior.hpp>
+#include <morbid/ior/tagged_profile.hpp>
 
 #include <boost/spirit/home/karma.hpp>
 
 namespace giop = morbid::giop;
 namespace iiop = morbid::iiop;
+namespace ior = morbid::ior;
 namespace fusion = boost::fusion;
 namespace mpl = boost::mpl;
 namespace karma = boost::spirit::karma;
+namespace qi = boost::spirit::qi;
+namespace spirit = boost::spirit;
+namespace phoenix = boost::phoenix;
 
 template <typename A>
 struct request_types
@@ -128,16 +139,140 @@ int main(int argc, char** argv)
         {
           std::cout << "Sent " << buffer.size() << std::endl;
 
-          std::vector<char> read_buffer(4096);
+          std::vector<char> reply_buffer(4096);
           std::size_t size = socket.read_some
-            (boost::asio::mutable_buffers_1(&read_buffer[0], read_buffer.size()), ec);
-          read_buffer.resize(size);
+            (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
+          reply_buffer.resize(size);
 
           if(!ec)
           {
-            std::cout << "Read " << read_buffer.size() << std::endl;
-
+            std::cout << "Read " << reply_buffer.size() << std::endl;
+            typedef std::vector<char>::iterator iterator_type;
+            iterator_type first = reply_buffer.begin()
+              ,  last = reply_buffer.end();
             
+            typedef typename fusion::result_of::as_vector
+              <fusion::joint_view<fusion::single_view<char> // minor version
+                                  , iiop::profile_body> >::type profile_body_1_1_attr;
+
+            ior::grammar::tagged_profile<iiop::parser_domain, iterator_type
+                                         , ior::tagged_profile> tagged_profile;
+            iiop::grammar::profile_body_1_0<iiop::parser_domain, iterator_type
+                                            , iiop::profile_body> profile_body_1_0;
+            iiop::grammar::profile_body_1_1<iiop::parser_domain, iterator_type
+                                            , profile_body_1_1_attr> profile_body_1_1;
+            ior::grammar::generic_tagged_profile<iiop::parser_domain, iterator_type
+                                                 , boost::variant<iiop::profile_body, profile_body_1_1_attr>, 0u
+                                                 > tagged_profile_body
+              (giop::endianness[profile_body_1_0 | profile_body_1_1]);
+
+            typedef fusion::vector2<std::string
+                                    , std::vector
+                                    <boost::variant<iiop::profile_body, profile_body_1_1_attr, ior::tagged_profile> >
+                                    > arguments_attribute_type;
+
+            typedef fusion::vector3<std::string, unsigned int, unsigned int>
+              system_exception_attribute_type;
+            // typedef boost::variant<system_exception_attribute_type
+            //                        , arguments_attribute_type> variant_attribute_type;
+
+            typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > >
+              service_context_list;
+            typedef fusion::vector4<service_context_list, unsigned int, unsigned int
+                                    , arguments_attribute_type/*variant_attribute_type*/>
+              reply_attribute_type;
+            typedef fusion::vector1<reply_attribute_type>
+              message_attribute_type;
+            // typedef arguments_grammar
+            //   <iterator_type, arguments_attribute_type>
+            //   arguments_grammar;
+            typedef giop::grammars::system_exception_reply_body
+              <iiop::parser_domain, iterator_type, system_exception_attribute_type>
+              system_exception_grammar;
+            typedef giop::grammars::reply_1_0<iiop::parser_domain
+                                              , iterator_type, reply_attribute_type>
+              reply_grammar;
+            typedef giop::grammars::message_1_0
+              <iiop::parser_domain
+               , iterator_type, message_attribute_type, 1u /* Reply */>
+              message_grammar;
+            typedef ior::grammar::ior<iiop::parser_domain, iterator_type
+                                      , arguments_attribute_type>
+              arguments_grammar;
+            arguments_grammar arguments_grammar_(tagged_profile_body | tagged_profile);
+            system_exception_grammar system_exception_grammar_;
+
+            reply_grammar reply_grammar_
+              (
+               // (
+                spirit::eps(phoenix::at_c<2u>(spirit::_val) == 0u)
+                & arguments_grammar_
+               // ) |
+               // (
+               //  spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
+               //  & system_exception_grammar_
+               // )
+              );
+
+            message_grammar message_grammar_(reply_grammar_);
+            namespace qi = boost::spirit::qi;
+            message_attribute_type attribute;
+            if(qi::parse(first, last
+                         , giop::compile<iiop::parser_domain>(message_grammar_)
+                         , attribute))
+            {
+              std::cout << "Succesful parsing" << std::endl;
+
+              arguments_attribute_type ref = fusion::at_c<3u>(fusion::at_c<0u>(attribute));
+              if(fusion::at_c<0u>(ref) == "IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")
+              {
+                std::cout << "Found reference for AccessControl for OpenBus" << std::endl;
+
+                typedef std::vector
+                  <boost::variant<iiop::profile_body, profile_body_1_1_attr
+                                  , ior::tagged_profile> > profiles_type;
+                for(profiles_type::const_iterator first = fusion::at_c<1u>(ref).begin()
+                      , last = fusion::at_c<1u>(ref).end(); first != last; ++first)
+                {
+                  if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
+                  {
+                    std::cout << "IIOP Profile Body" << std::endl;
+                  }
+                  else if(profile_body_1_1_attr const* p
+                          = boost::get<profile_body_1_1_attr>(&*first))
+                  {
+                    std::cout << "IIOP Profile Body 1 1" << std::endl;
+
+                    std::cout << "Hostname: " << fusion::at_c<1u>(*p)
+                              << " Port: " << fusion::at_c<2u>(*p) << std::endl;
+
+                    boost::asio::ip::tcp::resolver::query query
+                      (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
+                    boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
+                    if(!ec)
+                    {
+                      std::cout << "Succesful querying hostname from IIOP Profile" << std::endl;
+                    }
+                    else
+                    {
+                      std::cout << "Querying hostname from IIOP Profile failed" << std::endl;
+                    }
+                  }
+                  else
+                  {
+                    std::cout << "Other Tagged Profiles" << std::endl;
+                  }
+                }
+              }
+              else
+              {
+                std::cout << "Reference is not for AccessControl" << std::endl;
+              }
+            }
+            else
+            {
+              std::cout << "Failed parsing arguments" << std::endl;
+            }
 
           }
           else
