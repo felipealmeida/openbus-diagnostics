@@ -69,6 +69,41 @@ struct request_types
   }
 };
 
+template <typename Iterator>
+struct reference_types
+{
+  typedef typename fusion::result_of::as_vector
+  <fusion::joint_view<fusion::single_view<char> // minor version
+                      , iiop::profile_body> >::type profile_body_1_1_attr;
+
+  ior::grammar::tagged_profile<iiop::parser_domain, Iterator
+                               , ior::tagged_profile> tagged_profile;
+  iiop::grammar::profile_body_1_0<iiop::parser_domain, Iterator
+                                  , iiop::profile_body> profile_body_1_0;
+  iiop::grammar::profile_body_1_1<iiop::parser_domain, Iterator
+                                  , profile_body_1_1_attr> profile_body_1_1;
+  ior::grammar::generic_tagged_profile<iiop::parser_domain, Iterator
+                                       , boost::variant<iiop::profile_body, profile_body_1_1_attr>, 0u
+                                       > tagged_profile_body;
+
+
+  typedef fusion::vector2<std::string
+                          , std::vector
+                          <boost::variant<iiop::profile_body, profile_body_1_1_attr, ior::tagged_profile> >
+                          > reference_attribute_type;
+
+  typedef ior::grammar::ior<iiop::parser_domain, Iterator
+                            , reference_attribute_type>
+    reference_grammar;
+
+  reference_grammar reference_grammar_;
+
+  reference_types()
+    : tagged_profile_body(giop::endianness[profile_body_1_0 | profile_body_1_1])
+    , reference_grammar_(tagged_profile_body | tagged_profile)
+  {}
+};
+
 int main(int argc, char** argv)
 {
   boost::program_options::options_description desc("Allowed options");
@@ -150,26 +185,10 @@ int main(int argc, char** argv)
             typedef std::vector<char>::iterator iterator_type;
             iterator_type first = reply_buffer.begin()
               ,  last = reply_buffer.end();
-            
-            typedef typename fusion::result_of::as_vector
-              <fusion::joint_view<fusion::single_view<char> // minor version
-                                  , iiop::profile_body> >::type profile_body_1_1_attr;
 
-            ior::grammar::tagged_profile<iiop::parser_domain, iterator_type
-                                         , ior::tagged_profile> tagged_profile;
-            iiop::grammar::profile_body_1_0<iiop::parser_domain, iterator_type
-                                            , iiop::profile_body> profile_body_1_0;
-            iiop::grammar::profile_body_1_1<iiop::parser_domain, iterator_type
-                                            , profile_body_1_1_attr> profile_body_1_1;
-            ior::grammar::generic_tagged_profile<iiop::parser_domain, iterator_type
-                                                 , boost::variant<iiop::profile_body, profile_body_1_1_attr>, 0u
-                                                 > tagged_profile_body
-              (giop::endianness[profile_body_1_0 | profile_body_1_1]);
-
-            typedef fusion::vector2<std::string
-                                    , std::vector
-                                    <boost::variant<iiop::profile_body, profile_body_1_1_attr, ior::tagged_profile> >
-                                    > arguments_attribute_type;
+            typedef ::reference_types<iterator_type> reference_types;
+            reference_types reference_types_;
+            typedef reference_types::reference_attribute_type arguments_attribute_type;
 
             typedef fusion::vector3<std::string, unsigned int, unsigned int>
               system_exception_attribute_type;
@@ -196,17 +215,13 @@ int main(int argc, char** argv)
               <iiop::parser_domain
                , iterator_type, message_attribute_type, 1u /* Reply */>
               message_grammar;
-            typedef ior::grammar::ior<iiop::parser_domain, iterator_type
-                                      , arguments_attribute_type>
-              arguments_grammar;
-            arguments_grammar arguments_grammar_(tagged_profile_body | tagged_profile);
             system_exception_grammar system_exception_grammar_;
 
             reply_grammar reply_grammar_
               (
                // (
                 spirit::eps(phoenix::at_c<2u>(spirit::_val) == 0u)
-                & arguments_grammar_
+                & reference_types_.reference_grammar_
                // ) |
                // (
                //  spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
@@ -229,7 +244,7 @@ int main(int argc, char** argv)
                 std::cout << "Found reference for AccessControl for OpenBus" << std::endl;
 
                 typedef std::vector
-                  <boost::variant<iiop::profile_body, profile_body_1_1_attr
+                  <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
                                   , ior::tagged_profile> > profiles_type;
                 for(profiles_type::const_iterator first = fusion::at_c<1u>(ref).begin()
                       , last = fusion::at_c<1u>(ref).end(); first != last; ++first)
@@ -238,8 +253,8 @@ int main(int argc, char** argv)
                   {
                     std::cout << "IIOP Profile Body" << std::endl;
                   }
-                  else if(profile_body_1_1_attr const* p
-                          = boost::get<profile_body_1_1_attr>(&*first))
+                  else if(reference_types::profile_body_1_1_attr const* p
+                          = boost::get<reference_types::profile_body_1_1_attr>(&*first))
                   {
                     std::cout << "IIOP Profile Body 1 1" << std::endl;
 
