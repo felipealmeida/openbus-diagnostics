@@ -192,19 +192,16 @@ int main(int argc, char** argv)
 
             typedef fusion::vector3<std::string, unsigned int, unsigned int>
               system_exception_attribute_type;
-            // typedef boost::variant<system_exception_attribute_type
-            //                        , arguments_attribute_type> variant_attribute_type;
+            typedef boost::variant<system_exception_attribute_type
+                                   , arguments_attribute_type> variant_attribute_type;
 
             typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > >
               service_context_list;
             typedef fusion::vector4<service_context_list, unsigned int, unsigned int
-                                    , arguments_attribute_type/*variant_attribute_type*/>
+                                    , variant_attribute_type>
               reply_attribute_type;
             typedef fusion::vector1<reply_attribute_type>
               message_attribute_type;
-            // typedef arguments_grammar
-            //   <iterator_type, arguments_attribute_type>
-            //   arguments_grammar;
             typedef giop::grammars::system_exception_reply_body
               <iiop::parser_domain, iterator_type, system_exception_attribute_type>
               system_exception_grammar;
@@ -219,14 +216,14 @@ int main(int argc, char** argv)
 
             reply_grammar reply_grammar_
               (
-               // (
+               (
                 spirit::eps(phoenix::at_c<2u>(spirit::_val) == 0u)
                 & reference_types_.reference_grammar_
-               // ) |
-               // (
-               //  spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
-               //  & system_exception_grammar_
-               // )
+               ) |
+               (
+                spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
+                & system_exception_grammar_
+               )
               );
 
             message_grammar message_grammar_(reply_grammar_);
@@ -238,50 +235,61 @@ int main(int argc, char** argv)
             {
               std::cout << "Succesful parsing" << std::endl;
 
-              arguments_attribute_type ref = fusion::at_c<3u>(fusion::at_c<0u>(attribute));
-              if(fusion::at_c<0u>(ref) == "IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")
+              variant_attribute_type variant_attr
+                = fusion::at_c<3u>(fusion::at_c<0u>(attribute));
+              if(system_exception_attribute_type* attr = boost::get
+                 <system_exception_attribute_type>(&variant_attr))
               {
-                std::cout << "Found reference for AccessControl for OpenBus" << std::endl;
-
-                typedef std::vector
-                  <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
-                                  , ior::tagged_profile> > profiles_type;
-                for(profiles_type::const_iterator first = fusion::at_c<1u>(ref).begin()
-                      , last = fusion::at_c<1u>(ref).end(); first != last; ++first)
+                std::cout << "A exception was thrown!" << std::endl;
+              }
+              else if(arguments_attribute_type* attr = boost::get
+                      <arguments_attribute_type>(&variant_attr))
+              {
+                std::cout << "Reply was received" << std::endl;
+                if(fusion::at_c<0u>(*attr) == "IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")
                 {
-                  if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
-                  {
-                    std::cout << "IIOP Profile Body" << std::endl;
-                  }
-                  else if(reference_types::profile_body_1_1_attr const* p
-                          = boost::get<reference_types::profile_body_1_1_attr>(&*first))
-                  {
-                    std::cout << "IIOP Profile Body 1 1" << std::endl;
+                  std::cout << "Found reference for AccessControl for OpenBus" << std::endl;
 
-                    std::cout << "Hostname: " << fusion::at_c<1u>(*p)
-                              << " Port: " << fusion::at_c<2u>(*p) << std::endl;
-
-                    boost::asio::ip::tcp::resolver::query query
-                      (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
-                    boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
-                    if(!ec)
+                  typedef std::vector
+                    <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
+                                    , ior::tagged_profile> > profiles_type;
+                  for(profiles_type::const_iterator first = fusion::at_c<1u>(*attr).begin()
+                        , last = fusion::at_c<1u>(*attr).end(); first != last; ++first)
+                  {
+                    if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
                     {
-                      std::cout << "Succesful querying hostname from IIOP Profile" << std::endl;
+                      std::cout << "IIOP Profile Body" << std::endl;
+                    }
+                    else if(reference_types::profile_body_1_1_attr const* p
+                            = boost::get<reference_types::profile_body_1_1_attr>(&*first))
+                    {
+                      std::cout << "IIOP Profile Body 1 1" << std::endl;
+
+                      std::cout << "Hostname: " << fusion::at_c<1u>(*p)
+                                << " Port: " << fusion::at_c<2u>(*p) << std::endl;
+
+                      boost::asio::ip::tcp::resolver::query query
+                        (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
+                      boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
+                      if(!ec)
+                      {
+                        std::cout << "Succesful querying hostname from IIOP Profile" << std::endl;
+                      }
+                      else
+                      {
+                        std::cout << "Querying hostname from IIOP Profile failed" << std::endl;
+                      }
                     }
                     else
                     {
-                      std::cout << "Querying hostname from IIOP Profile failed" << std::endl;
+                      std::cout << "Other Tagged Profiles" << std::endl;
                     }
                   }
-                  else
-                  {
-                    std::cout << "Other Tagged Profiles" << std::endl;
-                  }
                 }
-              }
-              else
-              {
-                std::cout << "Reference is not for AccessControl" << std::endl;
+                else
+                {
+                  std::cout << "Reference is not for AccessControl" << std::endl;
+                }
               }
             }
             else
