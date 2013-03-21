@@ -16,10 +16,46 @@
 
 namespace giop = morbid::giop;
 namespace iiop = morbid::iiop;
+namespace fusion = boost::fusion;
+namespace mpl = boost::mpl;
+namespace karma = boost::spirit::karma;
 
-struct arguments_traits
+template <typename A>
+struct request_types
 {
-  
+  typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
+  typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > > service_context_list;
+
+  typedef fusion::vector7<service_context_list
+                          , unsigned int, bool, std::vector<char>, std::string
+                          , std::vector<char>
+                          , A>
+    request_attribute_type;
+  typedef fusion::vector1<fusion::vector1<request_attribute_type> >
+    message_attribute_type;
+
+  typedef giop::grammars::request_1_0<iiop::generator_domain
+                                      , output_iterator_type, request_attribute_type>
+    request_header_grammar;
+  typedef giop::grammars::message_1_0<iiop::generator_domain
+                                      , output_iterator_type, message_attribute_type
+                                      , 0u /* request */>
+    message_header_grammar;
+
+  request_header_grammar request_header_grammar_;
+  message_header_grammar message_header_grammar_;
+  message_attribute_type attribute;
+
+  template <typename G, typename A0>
+  request_types(G g, std::vector<char> const& object_key, std::string const& method, A0 a0)
+    : request_header_grammar_(g)
+    , message_header_grammar_(request_header_grammar_)
+    , attribute(fusion::make_vector
+                (request_attribute_type
+                 (service_context_list(), 1u, true, object_key
+                  , method, std::vector<char>(), a0)))
+  {
+  }
 };
 
 int main(int argc, char** argv)
@@ -66,49 +102,23 @@ int main(int argc, char** argv)
     {
       std::cout << "Connection to hostname and port of bus was successful" << std::endl;
 
-      namespace fusion = boost::fusion;
-      namespace mpl = boost::mpl;
-      namespace karma = boost::spirit::karma;
-
-      typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
-      typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > > service_context_list;
-
-      typedef fusion::vector7<service_context_list
-                              , unsigned int, bool, std::vector<char>, std::string
-                              , std::vector<char>
-                              , std::string>
-        request_attribute_type;
-      typedef fusion::vector1<fusion::vector1<request_attribute_type> >
-        message_attribute_type;
-
-      typedef giop::grammars::request_1_0<iiop::generator_domain
-                                          , output_iterator_type, request_attribute_type>
-        request_header_grammar;
-      typedef giop::grammars::message_1_0<iiop::generator_domain
-                                          , output_iterator_type, message_attribute_type
-                                          , 0u /* request */>
-        message_header_grammar;
 
       std::vector<char> object_key;
       const char object_key_lit[] = "OpenBus_2_0";
       object_key.insert(object_key.end(), &object_key_lit[0]
                         , &object_key_lit[0] + sizeof(object_key_lit)-1);
       std::string method("getFacet");
-      std::string facet_interface("IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0");
-      
-      request_header_grammar request_header_grammar_(giop::string);
-      message_header_grammar message_header_grammar_(request_header_grammar_);
-      message_attribute_type attribute
-        (fusion::make_vector
-         (request_attribute_type
-          (service_context_list(), 1u, true, object_key
-           , method, std::vector<char>(), facet_interface)));
+      std::string facet_interface
+        ("IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0");
+
+      typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
+      request_types<std::string> rt(giop::string, object_key, method, facet_interface);
       
       std::vector<char> buffer;
       output_iterator_type iterator(buffer);
       if(karma::generate(iterator, giop::compile<iiop::generator_domain>
-                         (message_header_grammar_(giop::native_endian))
-                         , attribute))
+                         (rt.message_header_grammar_(giop::native_endian))
+                         , rt.attribute))
       {
         std::cout << "Generated " << buffer.size() << std::endl;
 
@@ -118,17 +128,31 @@ int main(int argc, char** argv)
         {
           std::cout << "Sent " << buffer.size() << std::endl;
 
-          
+          std::vector<char> read_buffer(4096);
+          std::size_t size = socket.read_some
+            (boost::asio::mutable_buffers_1(&read_buffer[0], read_buffer.size()), ec);
+          read_buffer.resize(size);
 
+          if(!ec)
+          {
+            std::cout << "Read " << read_buffer.size() << std::endl;
+
+            
+
+          }
+          else
+          {
+            std::cout << "Failed reading: " << ec << std::endl;
+          }
         }
         else
         {
-          std::cout << "Failed sending " << buffer.size() << std::endl;
+          std::cout << "Failed sending " << buffer.size() << ": " << ec << std::endl;
         }        
       }
       else
       {
-        std::cout << "Failed generating first message" << std::endl;
+        std::cout << "Failed generating first message: " << ec << std::endl;
       }
       
     }
