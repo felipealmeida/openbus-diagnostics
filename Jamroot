@@ -6,7 +6,7 @@ project openbus-diagnostics
 exe openbus-diagnostics
  : src/main.cpp /boost//program_options /boost//system /morbid//iiop
  /morbid//ior
- : <threading>multi
+ : <threading>multi <include>include
  ;
 
 install stage : openbus-diagnostics ;
