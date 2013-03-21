@@ -145,13 +145,13 @@ int main(int argc, char** argv)
       (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
     boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
 
-    OB_DIAG_REQUIRE(ec, "Resolving hostname was successful"
+    OB_DIAG_REQUIRE(!ec, "Resolving hostname was successful"
                     , "Resolving hostname failed with error: " << ec.message())
     
     remote_endpoint.port(port);
     socket.connect(remote_endpoint, ec);
 
-    OB_DIAG_REQUIRE(ec, "Connection to hostname and port of bus was successful"
+    OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
                     , "Connection to hostname and port of bus failed with error: " << ec.message())
                     
     std::vector<char> object_key;
@@ -174,10 +174,11 @@ int main(int argc, char** argv)
 
     OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
                     , "Failed generating request. This is a bug in the diagnostic tool")
+
     boost::asio::write(socket, boost::asio::buffer(buffer)
                        , boost::asio::transfer_all(), ec);
 
-    OB_DIAG_REQUIRE(ec, "Sent buffer with request"
+    OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
                     , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
 
     buffer.resize(0);
@@ -187,7 +188,7 @@ int main(int argc, char** argv)
       (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
     reply_buffer.resize(size);
 
-    OB_DIAG_REQUIRE(ec, "Read reply with " << reply_buffer.size() << " bytes"
+    OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
                     ,  "Failed reading with error " << ec.message())
 
     typedef std::vector<char>::iterator iterator_type;
