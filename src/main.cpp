@@ -110,6 +110,80 @@ struct reference_types
   {}
 };
 
+void profile_body_test(std::string const& hostname, unsigned short port)
+{
+  boost::asio::io_service io_service;
+  boost::asio::ip::tcp::socket socket(io_service, boost::asio::ip::tcp::endpoint());
+
+  std::cout << "Hostname: " << hostname
+            << " Port: " << port << std::endl;
+        
+  boost::asio::ip::tcp::resolver resolver(io_service);
+  boost::asio::ip::tcp::resolver::query query
+    (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
+  boost::system::error_code ec;
+  boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
+  remote_endpoint.port(port);
+
+  OB_DIAG_REQUIRE(!ec, "Succesful querying hostname(" << hostname << ") from IIOP Profile"
+                  , "Querying hostname(" << hostname << ") from IIOP Profile failed with error " << ec.message() << ". Check /etc/hosts in the server for any misconfigured hostnames")
+
+  socket.connect(remote_endpoint, ec);
+
+  OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of IIOP Profile was succesful"
+                  , "Connection to hostname and port of IIOP Profile was succesful failed with error " << ec.message())
+}
+
+template <typename A>
+struct reply_types
+{
+  typedef std::vector<char>::iterator iterator_type;
+  typedef fusion::vector3<std::string, unsigned int, unsigned int>
+    system_exception_attribute_type;
+  typedef boost::variant<system_exception_attribute_type
+                         , A> variant_attribute_type;
+
+  typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > >
+    service_context_list;
+  typedef fusion::vector4<service_context_list, unsigned int, unsigned int
+                          , variant_attribute_type>
+    reply_attribute_type;
+  typedef fusion::vector1<reply_attribute_type>
+    message_attribute_type;
+  typedef giop::grammars::system_exception_reply_body
+    <iiop::parser_domain, iterator_type, system_exception_attribute_type>
+    system_exception_grammar;
+  typedef giop::grammars::reply_1_0<iiop::parser_domain
+                                    , iterator_type, reply_attribute_type>
+    reply_grammar;
+  typedef giop::grammars::message_1_0
+    <iiop::parser_domain
+     , iterator_type, message_attribute_type, 1u /* Reply */>
+    message_grammar;
+  system_exception_grammar system_exception_grammar_;
+
+  reply_grammar reply_grammar_;
+
+  message_grammar message_grammar_;
+  message_attribute_type attribute;
+
+  template <typename U>
+  reply_types(U const& u)
+    : reply_grammar_
+      (
+       (
+        spirit::eps(phoenix::at_c<2u>(spirit::_val) == 0u)
+        & u
+       ) |
+       (
+        spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
+        & system_exception_grammar_
+       )
+      )
+    , message_grammar_(reply_grammar_)
+  {}  
+};
+
 int main(int argc, char** argv)
 {
   try
@@ -199,64 +273,34 @@ int main(int argc, char** argv)
     reference_types reference_types_;
     typedef reference_types::reference_attribute_type arguments_attribute_type;
 
-    typedef fusion::vector3<std::string, unsigned int, unsigned int>
-      system_exception_attribute_type;
-    typedef boost::variant<system_exception_attribute_type
-                           , arguments_attribute_type> variant_attribute_type;
+    typedef reply_types<arguments_attribute_type> get_facet_reply_type;
+    get_facet_reply_type get_facet_reply(reference_types_.reference_grammar_);
 
-    typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > >
-      service_context_list;
-    typedef fusion::vector4<service_context_list, unsigned int, unsigned int
-                                    , variant_attribute_type>
-      reply_attribute_type;
-    typedef fusion::vector1<reply_attribute_type>
-      message_attribute_type;
-    typedef giop::grammars::system_exception_reply_body
-      <iiop::parser_domain, iterator_type, system_exception_attribute_type>
-      system_exception_grammar;
-    typedef giop::grammars::reply_1_0<iiop::parser_domain
-                                              , iterator_type, reply_attribute_type>
-      reply_grammar;
-    typedef giop::grammars::message_1_0
-      <iiop::parser_domain
-       , iterator_type, message_attribute_type, 1u /* Reply */>
-      message_grammar;
-    system_exception_grammar system_exception_grammar_;
-
-    reply_grammar reply_grammar_
-      (
-       (
-        spirit::eps(phoenix::at_c<2u>(spirit::_val) == 0u)
-        & reference_types_.reference_grammar_
-       ) |
-       (
-        spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
-        & system_exception_grammar_
-       )
-      );
-
-    message_grammar message_grammar_(reply_grammar_);
-    namespace qi = boost::spirit::qi;
-    message_attribute_type attribute;
     g = qi::parse(first, last
-                  , giop::compile<iiop::parser_domain>(message_grammar_)
-                  , attribute);
+                  , giop::compile<iiop::parser_domain>(get_facet_reply.message_grammar_)
+                  , get_facet_reply.attribute);
 
     OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
                     , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
 
-    variant_attribute_type variant_attr
-      = fusion::at_c<3u>(fusion::at_c<0u>(attribute));
+    get_facet_reply_type::variant_attribute_type variant_attr
+      = fusion::at_c<3u>(fusion::at_c<0u>(get_facet_reply.attribute));
 
-    OB_DIAG_FAIL(system_exception_attribute_type* attr = boost::get
-                 <system_exception_attribute_type>(&variant_attr)
+    OB_DIAG_FAIL(get_facet_reply_type::system_exception_attribute_type* attr = boost::get
+                 <get_facet_reply_type::system_exception_attribute_type>(&variant_attr)
                  , "A exception was thrown!")
+
+    socket.close();
 
     arguments_attribute_type& attr = boost::get<arguments_attribute_type>(variant_attr);
 
     OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")
                     , "Found reference for AccessControl for OpenBus"
                     , "Expected reference for AccessControl, found instead reference to " << fusion::at_c<0u>(attr))
+
+    bool has_iiop_profile_1_0 = false
+      , has_iiop_profile = false;
+    std::vector<char> access_control_object_key;
 
     typedef std::vector
       <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
@@ -267,32 +311,55 @@ int main(int argc, char** argv)
       if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
       {
         std::cout << "IIOP Profile Body" << std::endl;
+        profile_body_test(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p));
+        if(access_control_object_key.empty())
+          access_control_object_key = fusion::at_c<2u>(*p);
+        has_iiop_profile_1_0 = true;
+        has_iiop_profile = true;
       }
       else if(reference_types::profile_body_1_1_attr const* p
               = boost::get<reference_types::profile_body_1_1_attr>(&*first))
       {
-        std::cout << "IIOP Profile Body 1 1" << std::endl;
-        
-        std::cout << "Hostname: " << fusion::at_c<1u>(*p)
-                  << " Port: " << fusion::at_c<2u>(*p) << std::endl;
-        
-        boost::asio::ip::tcp::resolver::query query
-          (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
-        boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
-        if(!ec)
-        {
-          std::cout << "Succesful querying hostname from IIOP Profile" << std::endl;
-        }
-        else
-        {
-          std::cout << "Querying hostname from IIOP Profile failed" << std::endl;
-        }
+        std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
+        profile_body_test(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p));
+        if(access_control_object_key.empty())
+          access_control_object_key = fusion::at_c<3u>(*p);
+        has_iiop_profile = true;
       }
       else
       {
         std::cout << "Other Tagged Profiles" << std::endl;
       }
     }
+
+    OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
+    OB_DIAG_WARN(!has_iiop_profile_1_0, "IOR has no IIOP Profile 1.0 bodies. If this application used a ORB which only implements IIOP 1.0 we couldn't communicate")
+
+    // Reading buskey attribute
+    socket.connect(remote_endpoint, ec);
+
+    OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
+                    , "Connection to hostname and port of bus failed with error: " << ec.message())
+
+    request_types<fusion::vector0<> > get_buskey_rt(spirit::eps, access_control_object_key
+                                         , "_get_buskey"
+                                         , fusion::vector0<>());
+      
+    iterator = output_iterator_type(buffer);
+    g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                        (get_buskey_rt.message_header_grammar_(giop::native_endian))
+                        , get_buskey_rt.attribute);
+
+
+    OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
+                    , "Failed generating request. This is a bug in the diagnostic tool")
+
+    boost::asio::write(socket, boost::asio::buffer(buffer)
+                       , boost::asio::transfer_all(), ec);
+
+    OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
+                    , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
+    
   }
   catch(ob_diag::require_error const&)
   {
