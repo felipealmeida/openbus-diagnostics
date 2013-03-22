@@ -168,12 +168,13 @@ struct reply_types
   message_attribute_type attribute;
 
   template <typename U>
-  reply_types(U const& u)
+  reply_types(U const& args_grammar)
     : reply_grammar_
       (
        (
         spirit::eps(phoenix::at_c<2u>(spirit::_val) == 0u)
-        & u
+       &
+        args_grammar
        ) |
        (
         spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
@@ -278,10 +279,13 @@ int main(int argc, char** argv)
 
     g = qi::parse(first, last
                   , giop::compile<iiop::parser_domain>(get_facet_reply.message_grammar_)
-                  , get_facet_reply.attribute);
+                  , get_facet_reply.attribute)
+      && first == last;
 
     OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
                     , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+    reply_buffer.resize(4096);
 
     get_facet_reply_type::variant_attribute_type variant_attr
       = fusion::at_c<3u>(fusion::at_c<0u>(get_facet_reply.attribute));
@@ -359,6 +363,30 @@ int main(int argc, char** argv)
 
     OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
                     , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
+    
+    size = socket.read_some
+      (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
+    reply_buffer.resize(size);
+
+    OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
+                    ,  "Failed reading with error " << ec.message())
+
+    first = reply_buffer.begin(),  last = reply_buffer.end();
+
+    typedef std::vector<unsigned char> get_buskey_args_attribute_type;
+    typedef reply_types<get_buskey_args_attribute_type> get_buskey_reply_type;
+    get_buskey_reply_type get_buskey_reply(giop::sequence[giop::octet]
+                                           // spirit::eps
+                                           );
+
+    g = qi::parse(first, last
+                  , giop::compile<iiop::parser_domain>
+                    (get_buskey_reply.message_grammar_)
+                  , get_buskey_reply.attribute)
+      && first == last;
+
+    OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
+                    , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
     
   }
   catch(ob_diag::require_error const&)
