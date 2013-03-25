@@ -27,6 +27,9 @@
 #include <boost/asio.hpp>
 #include <boost/fusion/include/vector.hpp>
 
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
+
 namespace giop = morbid::giop;
 namespace iiop = morbid::iiop;
 namespace ior = morbid::ior;
@@ -294,8 +297,6 @@ int main(int argc, char** argv)
                  <get_facet_reply_type::system_exception_attribute_type>(&variant_attr)
                  , "A exception was thrown!")
 
-    socket.close();
-
     arguments_attribute_type& attr = boost::get<arguments_attribute_type>(variant_attr);
 
     OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")
@@ -340,8 +341,6 @@ int main(int argc, char** argv)
     OB_DIAG_WARN(!has_iiop_profile_1_0, "IOR has no IIOP Profile 1.0 bodies. If this application used a ORB which only implements IIOP 1.0 we couldn't communicate")
 
     // Reading buskey attribute
-    socket.connect(remote_endpoint, ec);
-
     OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
                     , "Connection to hostname and port of bus failed with error: " << ec.message())
 
@@ -375,9 +374,7 @@ int main(int argc, char** argv)
 
     typedef std::vector<unsigned char> get_buskey_args_attribute_type;
     typedef reply_types<get_buskey_args_attribute_type> get_buskey_reply_type;
-    get_buskey_reply_type get_buskey_reply(giop::sequence[giop::octet]
-                                           // spirit::eps
-                                           );
+    get_buskey_reply_type get_buskey_reply(giop::sequence[giop::octet]);
 
     g = qi::parse(first, last
                   , giop::compile<iiop::parser_domain>
@@ -387,7 +384,30 @@ int main(int argc, char** argv)
 
     OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
                     , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+    get_buskey_reply_type::variant_attribute_type get_buskey_variant_attr
+      = fusion::at_c<3u>(fusion::at_c<0u>(get_buskey_reply.attribute));
+
+    OB_DIAG_FAIL(get_buskey_reply_type::system_exception_attribute_type* attr = boost::get
+                 <get_buskey_reply_type::system_exception_attribute_type>
+                 (&get_buskey_variant_attr)
+                 , "A exception was thrown!")
+
+    get_buskey_args_attribute_type& get_buskey_attr = boost::get<get_buskey_args_attribute_type>
+      (get_buskey_variant_attr);
     
+    std::cout << "Returned encoded buskey public key with size " << get_buskey_attr.size() << std::endl;
+
+    EVP_PKEY* bus_key;
+    {
+      unsigned char const* buf = &get_buskey_attr[0];
+      bus_key = d2i_PUBKEY(0, &buf, get_buskey_attr.size());
+    }
+
+    OB_DIAG_REQUIRE(bus_key != 0, "Read public key succesfully"
+                    , "Reading public key failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+      
   }
   catch(ob_diag::require_error const&)
   {
