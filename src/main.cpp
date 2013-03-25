@@ -309,7 +309,7 @@ int main(int argc, char** argv)
     get_facet_reply_type::variant_attribute_type variant_attr
       = fusion::at_c<3u>(fusion::at_c<0u>(get_facet_reply.attribute));
 
-    OB_DIAG_FAIL(get_facet_reply_type::system_exception_attribute_type* attr = boost::get
+    OB_DIAG_FAIL(/*get_facet_reply_type::system_exception_attribute_type* attr = */boost::get
                  <get_facet_reply_type::system_exception_attribute_type>(&variant_attr)
                  , "A exception was thrown!")
 
@@ -405,7 +405,7 @@ int main(int argc, char** argv)
       get_busid_reply_type::variant_attribute_type get_busid_variant_attr
         = fusion::at_c<3u>(fusion::at_c<0u>(get_busid_reply.attribute));
 
-      OB_DIAG_FAIL(get_busid_reply_type::system_exception_attribute_type* attr = boost::get
+      OB_DIAG_FAIL(/*get_busid_reply_type::system_exception_attribute_type* attr = */boost::get
                    <get_busid_reply_type::system_exception_attribute_type>
                    (&get_busid_variant_attr)
                    , "A exception was thrown!")
@@ -461,7 +461,7 @@ int main(int argc, char** argv)
     get_buskey_reply_type::variant_attribute_type get_buskey_variant_attr
       = fusion::at_c<3u>(fusion::at_c<0u>(get_buskey_reply.attribute));
 
-    OB_DIAG_FAIL(get_buskey_reply_type::system_exception_attribute_type* attr = boost::get
+    OB_DIAG_FAIL(/*get_buskey_reply_type::system_exception_attribute_type* attr = */boost::get
                  <get_buskey_reply_type::system_exception_attribute_type>
                  (&get_buskey_variant_attr)
                  , "A exception was thrown!")
@@ -589,7 +589,7 @@ int main(int argc, char** argv)
     login_reply_type::variant_attribute_type login_variant_attr
       = fusion::at_c<3u>(fusion::at_c<0u>(login_reply.attribute));
 
-    OB_DIAG_FAIL(login_reply_type::system_exception_attribute_type* attr = boost::get
+    OB_DIAG_FAIL(/*login_reply_type::system_exception_attribute_type* attr = */boost::get
                  <login_reply_type::system_exception_attribute_type>
                  (&login_variant_attr)
                  , "A exception was thrown!")
@@ -659,7 +659,7 @@ int main(int argc, char** argv)
       get_facet_reply_type::variant_attribute_type variant_attr
         = fusion::at_c<3u>(fusion::at_c<0u>(get_facet_reply.attribute));
 
-      OB_DIAG_FAIL(get_facet_reply_type::system_exception_attribute_type* attr = boost::get
+      OB_DIAG_FAIL(/*get_facet_reply_type::system_exception_attribute_type* attr = */boost::get
                    <get_facet_reply_type::system_exception_attribute_type>(&variant_attr)
                    , "A exception was thrown!")
 
