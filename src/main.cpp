@@ -26,6 +26,8 @@
 #include <boost/program_options.hpp>
 #include <boost/asio.hpp>
 #include <boost/fusion/include/vector.hpp>
+#include <boost/fusion/include/joint_view.hpp>
+#include <boost/fusion/include/as_vector.hpp>
 
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
@@ -46,12 +48,16 @@ struct request_types
   typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
   typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > > service_context_list;
 
-  typedef fusion::vector7<service_context_list
+  typedef fusion::vector6<service_context_list
                           , unsigned int, bool, std::vector<char>, std::string
-                          , std::vector<char>
-                          , A>
-    request_attribute_type;
-  typedef fusion::vector1<fusion::vector1<request_attribute_type> >
+                          , std::vector<char> >
+    request_grammar_attribute_type;
+  typedef fusion::joint_view
+    <request_grammar_attribute_type
+     , A> request_attribute_type;
+  // typedef typename fusion::result_of::as_vector<joint_request_attribute_type>::type
+  //   request_attribute_type;
+  typedef fusion::vector1</*fusion::vector1<*/request_attribute_type>// >
     message_attribute_type;
 
   typedef giop::grammars::request_1_0<iiop::generator_domain
@@ -64,16 +70,19 @@ struct request_types
 
   request_header_grammar request_header_grammar_;
   message_header_grammar message_header_grammar_;
+  request_grammar_attribute_type request_grammar_attribute;
+  A args;
   message_attribute_type attribute;
 
-  template <typename G, typename A0>
-  request_types(G g, std::vector<char> const& object_key, std::string const& method, A0 a0)
+  template <typename G>
+  request_types(G g, std::vector<char> const& object_key, std::string const& method, A const& args)
     : request_header_grammar_(g)
     , message_header_grammar_(request_header_grammar_)
-    , attribute(fusion::make_vector
-                (request_attribute_type
-                 (service_context_list(), 1u, true, object_key
-                  , method, std::vector<char>(), a0)))
+    , request_grammar_attribute(service_context_list(), 1u, true, object_key
+                                , method, std::vector<char>()
+                                )
+    , args(args)
+    , attribute(request_attribute_type(request_grammar_attribute, this->args))
   {
   }
 };
@@ -197,6 +206,8 @@ int main(int argc, char** argv)
       ("help", "Shows this message")
       ("host,h", boost::program_options::value<std::string>(), "Hostname of Openbus")
       ("port,p", boost::program_options::value<unsigned short>(), "Port of Openbus")
+      ("username", boost::program_options::value<std::string>(), "Username for authentication")
+      ("password", boost::program_options::value<std::string>(), "Password for authentatication")
       ;
 
     boost::program_options::variables_map vm;
@@ -204,7 +215,9 @@ int main(int argc, char** argv)
                                 , vm);
     boost::program_options::notify(vm);
 
-    if(vm.count("help") || !vm.count("host"))
+    if(vm.count("help") || !vm.count("host")
+       || !vm.count("port") || !vm.count("username")
+       || !vm.count("password"))
     {
       std::cout << desc << std::endl;
       return 1;
@@ -212,6 +225,8 @@ int main(int argc, char** argv)
 
     std::string hostname = vm["host"].as<std::string>();
     unsigned short port = vm["port"].as<unsigned short>();
+    std::string username = vm["username"].as<std::string>()
+      , password = vm["password"].as<std::string>();
 
     boost::asio::io_service io_service;
     boost::asio::ip::tcp::socket socket(io_service, boost::asio::ip::tcp::endpoint());
@@ -241,7 +256,9 @@ int main(int argc, char** argv)
       ("IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0");
 
     typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
-    request_types<std::string> rt(giop::string, object_key, method, facet_interface);
+    request_types<fusion::vector1<std::string> > rt
+      (giop::string, object_key, method
+       , fusion::vector1<std::string>(facet_interface));
       
     std::vector<char> buffer;
     output_iterator_type iterator(buffer);
@@ -407,7 +424,195 @@ int main(int argc, char** argv)
     OB_DIAG_REQUIRE(bus_key != 0, "Read public key succesfully"
                     , "Reading public key failed. This is a bug in the diagnostic or a bug in OpenBus")
 
+    EVP_PKEY* key = 0;
+    {
+      EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, 0);
+      int r = EVP_PKEY_keygen_init(ctx);
+      assert(r == 1);
+      r = EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048);
+      assert(r == 1);
+      r = EVP_PKEY_keygen(ctx, &key);
+      assert((r == 1) && key);
+    }
       
+    std::vector<unsigned char> password_vector(password.begin(), password.end());
+    std::vector<unsigned char> public_key_hash(32);
+    std::vector<unsigned char> public_key_buffer;
+
+    {
+      unsigned char* key_buffer = 0;
+      std::size_t len = i2d_PUBKEY(key, &key_buffer);
+      SHA256(key_buffer, len, &public_key_hash[0]);
+      public_key_buffer.insert(public_key_buffer.end(), key_buffer, key_buffer + len);
+    }
+
+    std::vector<unsigned char> encrypted_block;
+
+    {
+      std::vector<unsigned char> block;
+      typedef giop::forward_back_insert_iterator<std::vector<unsigned char> > output_iterator_type;
+      output_iterator_type iterator(block);
+      g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                          (giop::endianness(giop::native_endian)
+                           [+giop::octet & giop::sequence[giop::octet]
+                           ]
+                          )
+                          , fusion::make_vector(public_key_hash, password_vector));
+      
+      OB_DIAG_REQUIRE(g, "Generated buffer data to be transmitted encrypted to the Openbus " << block.size() << " bytes"
+                      , "Failed generating buffer data to be encrypted. This is a bug in the diagnostic tool")
+
+      {
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(bus_key, 0);
+        assert(!!ctx);
+        int r = EVP_PKEY_encrypt_init(ctx);
+        assert(r == 1);
+        std::size_t encrypted_size = 0;
+        r = EVP_PKEY_encrypt(ctx, 0, &encrypted_size, &block[0], block.size());
+        assert(r == 1);
+        encrypted_block.resize(encrypted_size);
+        r = EVP_PKEY_encrypt(ctx, &encrypted_block[0], &encrypted_size
+                             , &block[0], block.size());
+
+        std::cout << "Encrypted Block size: " << encrypted_block.size() << std::endl;
+      }
+        
+    }
+
+    typedef fusion::vector3<std::string, std::vector<unsigned char>
+                            , std::vector<unsigned char> >
+                            login_arguments_type;
+    request_types<login_arguments_type> login_rt
+      (
+       (
+        giop::string
+        & giop::sequence[giop::octet]
+        & +giop::octet
+       )
+       , access_control_object_key, "loginByPassword"
+       , login_arguments_type(username, public_key_buffer, encrypted_block));
+
+    buffer.resize(0);
+    iterator = output_iterator_type(buffer);
+    g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                        (login_rt.message_header_grammar_(giop::native_endian))
+                        , login_rt.attribute);
+    
+    OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
+                    , "Failed generating request. This is a bug in the diagnostic tool")
+
+    boost::asio::write(socket, boost::asio::buffer(buffer)
+                       , boost::asio::transfer_all(), ec);
+
+    OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
+                    , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
+    
+    size = socket.read_some
+      (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
+    reply_buffer.resize(size);
+
+    OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
+                    ,  "Failed reading with error " << ec.message())
+
+    first = reply_buffer.begin(),  last = reply_buffer.end();
+
+    typedef fusion::vector3<std::string, std::string, unsigned int> login_args_attribute_type;
+    typedef reply_types<login_args_attribute_type> login_reply_type;
+    login_reply_type login_reply(giop::string & giop::string & giop::ulong_);
+
+    g = qi::parse(first, last
+                  , giop::compile<iiop::parser_domain>
+                  (login_reply.message_grammar_)
+                  , login_reply.attribute)
+      && first == last;
+
+    OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
+                    , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+    login_reply_type::variant_attribute_type login_variant_attr
+      = fusion::at_c<3u>(fusion::at_c<0u>(login_reply.attribute));
+
+    OB_DIAG_FAIL(login_reply_type::system_exception_attribute_type* attr = boost::get
+                 <login_reply_type::system_exception_attribute_type>
+                 (&login_variant_attr)
+                 , "A exception was thrown!")
+
+    login_args_attribute_type& login_attr = boost::get<login_args_attribute_type>
+      (login_variant_attr);
+
+    std::cout << "Succesfully logged in. LoginInfo.id is " << fusion::at_c<0u>(login_attr) << std::endl;
+
+    {
+      std::vector<char> object_key;
+      object_key.insert(object_key.end(), &object_key_lit[0]
+                        , &object_key_lit[0] + sizeof(object_key_lit)-1);
+      std::string method("getFacet");
+      std::string facet_interface
+        ("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0");
+
+      typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
+      request_types<fusion::vector1<std::string> > rt
+        (giop::string, object_key, method
+         , fusion::vector1<std::string>(facet_interface));
+      
+      std::vector<char> buffer;
+      output_iterator_type iterator(buffer);
+      bool g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                               (rt.message_header_grammar_(giop::native_endian))
+                               , rt.attribute);
+
+      OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
+                      , "Failed generating request. This is a bug in the diagnostic tool")
+
+      boost::asio::write(socket, boost::asio::buffer(buffer)
+                         , boost::asio::transfer_all(), ec);
+
+      OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
+                      , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
+
+      std::vector<char> reply_buffer(4096);
+      std::size_t size = socket.read_some
+        (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
+      reply_buffer.resize(size);
+
+      OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
+                      ,  "Failed reading with error " << ec.message())
+
+      typedef std::vector<char>::iterator iterator_type;
+      iterator_type first = reply_buffer.begin()
+        ,  last = reply_buffer.end();
+
+      typedef ::reference_types<iterator_type> reference_types;
+      reference_types reference_types_;
+      typedef reference_types::reference_attribute_type arguments_attribute_type;
+
+      typedef reply_types<arguments_attribute_type> get_facet_reply_type;
+      get_facet_reply_type get_facet_reply(reference_types_.reference_grammar_);
+
+      g = qi::parse(first, last
+                    , giop::compile<iiop::parser_domain>(get_facet_reply.message_grammar_)
+                    , get_facet_reply.attribute)
+        && first == last;
+
+      OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
+                      , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+      get_facet_reply_type::variant_attribute_type variant_attr
+        = fusion::at_c<3u>(fusion::at_c<0u>(get_facet_reply.attribute));
+
+      OB_DIAG_FAIL(get_facet_reply_type::system_exception_attribute_type* attr = boost::get
+                   <get_facet_reply_type::system_exception_attribute_type>(&variant_attr)
+                   , "A exception was thrown!")
+
+      arguments_attribute_type& attr = boost::get<arguments_attribute_type>(variant_attr);
+
+      OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")
+                      , "Found reference for OfferRegistry for OpenBus"
+                      , "Expected reference for OfferRegistry, found instead reference to " << fusion::at_c<0u>(attr))
+
+        
+    }
+    
   }
   catch(ob_diag::require_error const&)
   {
