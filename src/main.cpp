@@ -55,9 +55,7 @@ struct request_types
   typedef fusion::joint_view
     <request_grammar_attribute_type
      , A> request_attribute_type;
-  // typedef typename fusion::result_of::as_vector<joint_request_attribute_type>::type
-  //   request_attribute_type;
-  typedef fusion::vector1</*fusion::vector1<*/request_attribute_type>// >
+  typedef fusion::vector1<request_attribute_type>
     message_attribute_type;
 
   typedef giop::grammars::request_1_0<iiop::generator_domain
@@ -75,10 +73,11 @@ struct request_types
   message_attribute_type attribute;
 
   template <typename G>
-  request_types(G g, std::vector<char> const& object_key, std::string const& method, A const& args)
+  request_types(G g, std::vector<char> const& object_key, std::string const& method, A const& args
+                , service_context_list const& service_context = service_context_list())
     : request_header_grammar_(g)
     , message_header_grammar_(request_header_grammar_)
-    , request_grammar_attribute(service_context_list(), 1u, true, object_key
+    , request_grammar_attribute(service_context, 1u, true, object_key
                                 , method, std::vector<char>()
                                 )
     , args(args)
@@ -320,8 +319,7 @@ int main(int argc, char** argv)
                     , "Found reference for AccessControl for OpenBus"
                     , "Expected reference for AccessControl, found instead reference to " << fusion::at_c<0u>(attr))
 
-    bool has_iiop_profile_1_0 = false
-      , has_iiop_profile = false;
+    bool has_iiop_profile = false;
     std::vector<char> access_control_object_key;
 
     typedef std::vector
@@ -336,7 +334,6 @@ int main(int argc, char** argv)
         profile_body_test(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p));
         if(access_control_object_key.empty())
           access_control_object_key = fusion::at_c<2u>(*p);
-        has_iiop_profile_1_0 = true;
         has_iiop_profile = true;
       }
       else if(reference_types::profile_body_1_1_attr const* p
@@ -355,16 +352,74 @@ int main(int argc, char** argv)
     }
 
     OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
-    OB_DIAG_WARN(!has_iiop_profile_1_0, "IOR has no IIOP Profile 1.0 bodies. If this application used a ORB which only implements IIOP 1.0 we couldn't communicate")
 
     // Reading buskey attribute
     OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
                     , "Connection to hostname and port of bus failed with error: " << ec.message())
 
+    std::string busid;
+    {
+      request_types<fusion::vector0<> > get_busid_rt(spirit::eps, access_control_object_key
+                                                     , "_get_busid"
+                                                     , fusion::vector0<>());
+
+      buffer.resize(0);
+      iterator = output_iterator_type(buffer);
+      g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                          (get_busid_rt.message_header_grammar_(giop::native_endian))
+                          , get_busid_rt.attribute);
+
+
+      OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
+                      , "Failed generating request. This is a bug in the diagnostic tool")
+
+      boost::asio::write(socket, boost::asio::buffer(buffer)
+                         , boost::asio::transfer_all(), ec);
+
+      OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
+                      , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
+    
+      reply_buffer.resize(4096);
+      size = socket.read_some
+        (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
+      reply_buffer.resize(size);
+
+      OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
+                      ,  "Failed reading with error " << ec.message())
+
+      first = reply_buffer.begin(),  last = reply_buffer.end();
+
+      typedef std::string get_busid_args_attribute_type;
+      typedef reply_types<get_busid_args_attribute_type> get_busid_reply_type;
+      get_busid_reply_type get_busid_reply(giop::string);
+
+      g = qi::parse(first, last
+                    , giop::compile<iiop::parser_domain>
+                    (get_busid_reply.message_grammar_)
+                    , get_busid_reply.attribute)
+        && first == last;
+
+      OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
+                      , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+      get_busid_reply_type::variant_attribute_type get_busid_variant_attr
+        = fusion::at_c<3u>(fusion::at_c<0u>(get_busid_reply.attribute));
+
+      OB_DIAG_FAIL(get_busid_reply_type::system_exception_attribute_type* attr = boost::get
+                   <get_busid_reply_type::system_exception_attribute_type>
+                   (&get_busid_variant_attr)
+                   , "A exception was thrown!")
+
+      busid = boost::get<get_busid_args_attribute_type>(get_busid_variant_attr);
+    
+      std::cout << "Returned busid " << busid << std::endl;
+    }
+    
+
     request_types<fusion::vector0<> > get_buskey_rt(spirit::eps, access_control_object_key
                                          , "_get_buskey"
                                          , fusion::vector0<>());
-      
+    buffer.clear();
     iterator = output_iterator_type(buffer);
     g = karma::generate(iterator, giop::compile<iiop::generator_domain>
                         (get_buskey_rt.message_header_grammar_(giop::native_endian))
@@ -380,6 +435,7 @@ int main(int argc, char** argv)
     OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
                     , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
     
+    reply_buffer.resize(4096);
     size = socket.read_some
       (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
     reply_buffer.resize(size);
@@ -507,6 +563,7 @@ int main(int argc, char** argv)
     OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
                     , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
     
+    reply_buffer.resize(4096);
     size = socket.read_some
       (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
     reply_buffer.resize(size);
@@ -540,8 +597,10 @@ int main(int argc, char** argv)
     login_args_attribute_type& login_attr = boost::get<login_args_attribute_type>
       (login_variant_attr);
 
-    std::cout << "Succesfully logged in. LoginInfo.id is " << fusion::at_c<0u>(login_attr) << std::endl;
+    std::string login_id = fusion::at_c<0u>(login_attr);
+    std::cout << "Succesfully logged in. LoginInfo.id is " << login_id << std::endl;
 
+    std::vector<char> offer_registry_object_key;
     {
       std::vector<char> object_key;
       object_key.insert(object_key.end(), &object_key_lit[0]
@@ -610,7 +669,167 @@ int main(int argc, char** argv)
                       , "Found reference for OfferRegistry for OpenBus"
                       , "Expected reference for OfferRegistry, found instead reference to " << fusion::at_c<0u>(attr))
 
+      bool has_iiop_profile = false;
+      typedef std::vector
+        <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
+                        , ior::tagged_profile> > profiles_type;
+      for(profiles_type::const_iterator first = fusion::at_c<1u>(attr).begin()
+            , last = fusion::at_c<1u>(attr).end(); first != last; ++first)
+      {
+        if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
+        {
+          std::cout << "IIOP Profile Body" << std::endl;
+          profile_body_test(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p));
+          if(offer_registry_object_key.empty())
+            offer_registry_object_key = fusion::at_c<2u>(*p);
+          has_iiop_profile = true;
+        }
+        else if(reference_types::profile_body_1_1_attr const* p
+                = boost::get<reference_types::profile_body_1_1_attr>(&*first))
+        {
+          std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
+          profile_body_test(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p));
+          if(offer_registry_object_key.empty())
+            offer_registry_object_key = fusion::at_c<3u>(*p);
+          has_iiop_profile = true;
+        }
+        else
+        {
+          std::cout << "Other Tagged Profiles" << std::endl;
+        }
+      }
+
+      OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
+    }
+
+    std::vector<char> empty_credential_data;
+    {
+      output_iterator_type iterator(empty_credential_data);
+      g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                          (
+                           giop::endianness(giop::native_endian)
+                           [
+                            giop::string & giop::string
+                            & giop::ulong_ & giop::ulong_
+                            & +giop::octet
+                            // Signed Call Chain
+                            & +giop::octet
+                            & giop::sequence[giop::octet]
+                           ]
+                          )
+                          , fusion::make_vector
+                          (busid, login_id, 0u, 0u, std::vector<unsigned char>(32u)
+                           , std::vector<unsigned char>(256u), std::string()));
+
+      OB_DIAG_REQUIRE(g, "Generated service context for starting session"
+                      , "Failed generating context for starting session. This is a bug in the diagnostic tool")
+    }
+    {
+      std::vector<fusion::vector2<std::string, std::string> >
+        properties;
+      properties.push_back(fusion::make_vector("offer.domain", "Demos"));
+      
+      typedef fusion::vector1<std::vector<fusion::vector2<std::string, std::string> > >
+        find_service_arguments_type;
+      typedef request_types<find_service_arguments_type> find_services_rt_type;
+      find_services_rt_type::service_context_list start_session_service_context;
+      start_session_service_context.push_back
+        (fusion::make_vector(0x42555300, empty_credential_data));
+      find_services_rt_type find_services_rt
+        (
+         (
+          giop::sequence[giop::string & giop::string]
+         )
+         , offer_registry_object_key, "findServices"
+         , find_service_arguments_type(properties), start_session_service_context);
+
+      buffer.resize(0);
+      iterator = output_iterator_type(buffer);
+      g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                          (find_services_rt.message_header_grammar_(giop::native_endian))
+                          , find_services_rt.attribute);
+      
+      OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
+                      , "Failed generating request. This is a bug in the diagnostic tool")
+
+      boost::asio::write(socket, boost::asio::buffer(buffer)
+                         , boost::asio::transfer_all(), ec);
+
+      OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
+                      , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
         
+      reply_buffer.resize(4096);
+      size = socket.read_some
+        (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
+      reply_buffer.resize(size);
+
+      OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
+                      ,  "Failed reading with error " << ec.message())
+
+      first = reply_buffer.begin(),  last = reply_buffer.end();
+
+      fusion::vector0<> dummy;
+      typedef reply_types<fusion::vector0<> > start_session_reply_type;
+      start_session_reply_type start_session_reply(spirit::eps(false));
+
+      g = qi::parse(first, last
+                    , giop::compile<iiop::parser_domain>
+                    (start_session_reply.message_grammar_)
+                    , start_session_reply.attribute)
+        && first == last;
+
+      OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
+                      , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+      start_session_reply_type::variant_attribute_type start_session_variant_attr
+        = fusion::at_c<3u>(fusion::at_c<0u>(start_session_reply.attribute));
+
+      OB_DIAG_FAIL(!boost::get<start_session_reply_type::system_exception_attribute_type>
+                   (&start_session_variant_attr)
+                   , "A exception was not thrown!")
+      
+      start_session_reply_type::system_exception_attribute_type& system_exception
+       = boost::get<start_session_reply_type::system_exception_attribute_type>
+        (start_session_variant_attr);
+      
+      {
+        start_session_reply_type::service_context_list& start_session_service_context
+          = fusion::at_c<0u>(fusion::at_c<0u>(start_session_reply.attribute));
+        
+        OB_DIAG_FAIL(start_session_service_context.size() == 0
+                     , "System exception thrown doesn't contain any ServiceContext. Can't create session.")
+        
+        OB_DIAG_FAIL(fusion::at_c<0u>(system_exception) != "IDL:omg.org/CORBA/NO_PERMISSION:1.0"
+                     , "System exception thrown is " << fusion::at_c<0u>(system_exception)
+                     << ". Expecting \"IDL:omg.org/CORBA/NO_PERMISSION:1.0\" exception")
+
+        std::cout << "Received " << start_session_service_context.size() << " service contexts" << std::endl;
+
+        OB_DIAG_FAIL(fusion::at_c<1u>(system_exception) != 0x42555300
+                     , "Minor code of system exception thrown is " << fusion::at_c<1u>(system_exception)
+                     << ". Expecting 0x42555300 in exception")
+
+        OB_DIAG_FAIL(fusion::at_c<0u>(start_session_service_context[0]) != 0x42555300
+                     , "Service Context id of system exception thrown is " << fusion::at_c<0u>(start_session_service_context[0])
+                     << ". Expecting 0x42555300 in exception")
+          
+        fusion::vector3<std::string, unsigned int, std::vector<char> > credential_reset;
+        std::vector<char>::iterator first = fusion::at_c<1u>(start_session_service_context[0]).begin()
+          , last = fusion::at_c<1u>(start_session_service_context[0]).end();
+        g = qi::parse(first, last
+                      , giop::compile<iiop::parser_domain>
+                      (giop::endianness
+                       [
+                        giop::string & giop::ulong_ & (spirit::repeat(256u)[giop::octet])
+                       ])
+                      , credential_reset)
+          && first == last;
+
+        OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
+                        , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
+          
+        
+      }
     }
     
   }
