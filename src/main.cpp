@@ -8,6 +8,7 @@
 #include <ob-diag/conditions.hpp>
 #include <ob-diag/make_request.hpp>
 #include <ob-diag/read_reply.hpp>
+#include <ob-diag/signed_call_chain.hpp>
 
 #include <morbid/giop/forward_back_insert_iterator.hpp>
 #include <morbid/giop/grammars/arguments.hpp>
@@ -105,6 +106,15 @@ void profile_body_test(std::string const& hostname, unsigned short port)
   OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of IIOP Profile was succesful"
                   , "Connection to hostname and port of IIOP Profile was succesful failed with error " << ec.message())
 }
+
+struct login_info
+{
+  std::string id, entity;
+  unsigned int validity_time;
+};
+
+BOOST_FUSION_ADAPT_STRUCT(login_info, (std::string, id)(std::string, entity)
+                          (unsigned int, validity_time));
 
 int main(int argc, char** argv)
 {
@@ -214,7 +224,6 @@ int main(int argc, char** argv)
 
     OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
 
-    // Reading buskey attribute
     OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
                     , "Connection to hostname and port of bus failed with error: " << ec.message())
 
@@ -225,106 +234,28 @@ int main(int argc, char** argv)
     std::vector<char> reply_buffer;
     iterator_type first, last;
     std::size_t size;
-    {
-      ob_diag::make_request(socket, access_control_object_key
-                            , "_get_busid", spirit::eps, fusion::vector0<>());
-    
-      reply_buffer.resize(4096);
-      size = socket.read_some
-        (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
-      reply_buffer.resize(size);
+    bool g;
 
-      OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
-                      ,  "Failed reading with error " << ec.message())
+    // Reading busid attribute
+    ob_diag::make_request(socket, access_control_object_key
+                          , "_get_busid", spirit::eps, fusion::vector0<>());
 
-      first = reply_buffer.begin(),  last = reply_buffer.end();
+    ob_diag::read_reply(socket, giop::string, busid);
 
-      typedef std::string get_busid_args_attribute_type;
-      typedef reply_types<get_busid_args_attribute_type> get_busid_reply_type;
-      get_busid_reply_type get_busid_reply(giop::string);
+    // Reading buskey attribute
+    ob_diag::make_request(socket, access_control_object_key
+                          , "_get_buskey", spirit::eps, fusion::vector0<>());
 
-      bool g = qi::parse(first, last
-                         , giop::compile<iiop::parser_domain>
-                         (get_busid_reply.message_grammar_)
-                         , get_busid_reply.attribute)
-        && first == last;
+    typedef std::vector<unsigned char> buskey_args_type;
+    buskey_args_type buskey_args;
+    ob_diag::read_reply(socket, giop::sequence[giop::octet], buskey_args);
 
-      OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
-                      , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
-
-      get_busid_reply_type::variant_attribute_type get_busid_variant_attr
-        = fusion::at_c<3u>(fusion::at_c<0u>(get_busid_reply.attribute));
-
-      OB_DIAG_FAIL(/*get_busid_reply_type::system_exception_attribute_type* attr = */boost::get
-                   <get_busid_reply_type::system_exception_attribute_type>
-                   (&get_busid_variant_attr)
-                   , "A exception was thrown!")
-
-      busid = boost::get<get_busid_args_attribute_type>(get_busid_variant_attr);
-    
-      std::cout << "Returned busid " << busid << std::endl;
-    }
-    
-
-    request_types<fusion::vector0<> > get_buskey_rt(spirit::eps, access_control_object_key
-                                         , "_get_buskey"
-                                         , fusion::vector0<>());
-    buffer.clear();
-    iterator = output_iterator_type(buffer);
-    bool g = karma::generate(iterator, giop::compile<iiop::generator_domain>
-                             (get_buskey_rt.message_header_grammar_(giop::native_endian))
-                             , get_buskey_rt.attribute);
-
-
-    OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
-                    , "Failed generating request. This is a bug in the diagnostic tool")
-
-    boost::asio::write(socket, boost::asio::buffer(buffer)
-                       , boost::asio::transfer_all(), ec);
-
-    OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
-                    , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
-    
-    reply_buffer.resize(4096);
-    size = socket.read_some
-      (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
-    reply_buffer.resize(size);
-
-    OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
-                    ,  "Failed reading with error " << ec.message())
-
-    first = reply_buffer.begin(),  last = reply_buffer.end();
-
-    typedef std::vector<unsigned char> get_buskey_args_attribute_type;
-    typedef reply_types<get_buskey_args_attribute_type> get_buskey_reply_type;
-    get_buskey_reply_type get_buskey_reply(giop::sequence[giop::octet]);
-
-    g = qi::parse(first, last
-                  , giop::compile<iiop::parser_domain>
-                    (get_buskey_reply.message_grammar_)
-                  , get_buskey_reply.attribute)
-      && first == last;
-
-    OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
-                    , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
-
-    get_buskey_reply_type::variant_attribute_type get_buskey_variant_attr
-      = fusion::at_c<3u>(fusion::at_c<0u>(get_buskey_reply.attribute));
-
-    OB_DIAG_FAIL(/*get_buskey_reply_type::system_exception_attribute_type* attr = */boost::get
-                 <get_buskey_reply_type::system_exception_attribute_type>
-                 (&get_buskey_variant_attr)
-                 , "A exception was thrown!")
-
-    get_buskey_args_attribute_type& get_buskey_attr = boost::get<get_buskey_args_attribute_type>
-      (get_buskey_variant_attr);
-    
-    std::cout << "Returned encoded buskey public key with size " << get_buskey_attr.size() << std::endl;
+    std::cout << "Returned encoded buskey public key with size " << buskey_args.size() << std::endl;
 
     EVP_PKEY* bus_key;
     {
-      unsigned char const* buf = &get_buskey_attr[0];
-      bus_key = d2i_PUBKEY(0, &buf, get_buskey_attr.size());
+      unsigned char const* buf = &buskey_args[0];
+      bus_key = d2i_PUBKEY(0, &buf, buskey_args.size());
     }
 
     OB_DIAG_REQUIRE(bus_key != 0, "Read public key succesfully"
@@ -385,132 +316,33 @@ int main(int argc, char** argv)
         
     }
 
-    typedef fusion::vector3<std::string, std::vector<unsigned char>
-                            , std::vector<unsigned char> >
-                            login_arguments_type;
-    request_types<login_arguments_type> login_rt
-      (
-       (
-        giop::string
-        & giop::sequence[giop::octet]
-        & +giop::octet
-       )
-       , access_control_object_key, "loginByPassword"
-       , login_arguments_type(username, public_key_buffer, encrypted_block));
+    ob_diag::make_request(socket, access_control_object_key
+                          , "loginByPassword"
+                          , giop::string
+                          & giop::sequence[giop::octet]
+                          & +giop::octet
+                          , fusion::make_vector(username, public_key_buffer, encrypted_block));
 
-    buffer.resize(0);
-    iterator = output_iterator_type(buffer);
-    g = karma::generate(iterator, giop::compile<iiop::generator_domain>
-                        (login_rt.message_header_grammar_(giop::native_endian))
-                        , login_rt.attribute);
-    
-    OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
-                    , "Failed generating request. This is a bug in the diagnostic tool")
+    ::login_info login_info;
+    ob_diag::read_reply(socket, giop::string & giop::string & giop::ulong_, login_info);
 
-    boost::asio::write(socket, boost::asio::buffer(buffer)
-                       , boost::asio::transfer_all(), ec);
-
-    OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
-                    , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
-    
-    reply_buffer.resize(4096);
-    size = socket.read_some
-      (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
-    reply_buffer.resize(size);
-
-    OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
-                    ,  "Failed reading with error " << ec.message())
-
-    first = reply_buffer.begin(),  last = reply_buffer.end();
-
-    typedef fusion::vector3<std::string, std::string, unsigned int> login_args_attribute_type;
-    typedef reply_types<login_args_attribute_type> login_reply_type;
-    login_reply_type login_reply(giop::string & giop::string & giop::ulong_);
-
-    g = qi::parse(first, last
-                  , giop::compile<iiop::parser_domain>
-                  (login_reply.message_grammar_)
-                  , login_reply.attribute)
-      && first == last;
-
-    OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
-                    , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
-
-    login_reply_type::variant_attribute_type login_variant_attr
-      = fusion::at_c<3u>(fusion::at_c<0u>(login_reply.attribute));
-
-    OB_DIAG_FAIL(/*login_reply_type::system_exception_attribute_type* attr = */boost::get
-                 <login_reply_type::system_exception_attribute_type>
-                 (&login_variant_attr)
-                 , "A exception was thrown!")
-
-    login_args_attribute_type& login_attr = boost::get<login_args_attribute_type>
-      (login_variant_attr);
-
-    std::string login_id = fusion::at_c<0u>(login_attr);
-    std::cout << "Succesfully logged in. LoginInfo.id is " << login_id << std::endl;
+    std::cout << "Succesfully logged in. LoginInfo.id is " << login_info.id << std::endl;
 
     std::vector<char> offer_registry_object_key;
+
     {
-      std::string method("getFacet");
-      std::string facet_interface
-        ("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0");
-
-      typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
-      request_types<fusion::vector1<std::string> > rt
-        (giop::string, openbus_object_key, method
-         , fusion::vector1<std::string>(facet_interface));
-      
-      std::vector<char> buffer;
-      output_iterator_type iterator(buffer);
-      bool g = karma::generate(iterator, giop::compile<iiop::generator_domain>
-                               (rt.message_header_grammar_(giop::native_endian))
-                               , rt.attribute);
-
-      OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
-                      , "Failed generating request. This is a bug in the diagnostic tool")
-
-      boost::asio::write(socket, boost::asio::buffer(buffer)
-                         , boost::asio::transfer_all(), ec);
-
-      OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
-                      , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
-
-      std::vector<char> reply_buffer(4096);
-      std::size_t size = socket.read_some
-        (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
-      reply_buffer.resize(size);
-
-      OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
-                      ,  "Failed reading with error " << ec.message())
+      ob_diag::make_request(socket, openbus_object_key, "getFacet"
+                            , giop::string
+                            , fusion::make_vector
+                            (std::string("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")));
 
       typedef std::vector<char>::iterator iterator_type;
-      iterator_type first = reply_buffer.begin()
-        ,  last = reply_buffer.end();
-
       typedef ::reference_types<iterator_type> reference_types;
       reference_types reference_types_;
       typedef reference_types::reference_attribute_type arguments_attribute_type;
 
-      typedef reply_types<arguments_attribute_type> get_facet_reply_type;
-      get_facet_reply_type get_facet_reply(reference_types_.reference_grammar_);
-
-      g = qi::parse(first, last
-                    , giop::compile<iiop::parser_domain>(get_facet_reply.message_grammar_)
-                    , get_facet_reply.attribute)
-        && first == last;
-
-      OB_DIAG_REQUIRE(g, "Parsing reply succesfully"
-                      , "Parsing reply failed. This is a bug in the diagnostic or a bug in OpenBus")
-
-      get_facet_reply_type::variant_attribute_type variant_attr
-        = fusion::at_c<3u>(fusion::at_c<0u>(get_facet_reply.attribute));
-
-      OB_DIAG_FAIL(/*get_facet_reply_type::system_exception_attribute_type* attr = */boost::get
-                   <get_facet_reply_type::system_exception_attribute_type>(&variant_attr)
-                   , "A exception was thrown!")
-
-      arguments_attribute_type& attr = boost::get<arguments_attribute_type>(variant_attr);
+      arguments_attribute_type attr;
+      ob_diag::read_reply(socket, reference_types_.reference_grammar_, attr);
 
       OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")
                       , "Found reference for OfferRegistry for OpenBus"
@@ -565,7 +397,7 @@ int main(int argc, char** argv)
                            ]
                           )
                           , fusion::make_vector
-                          (busid, login_id, 0u, 0u, std::vector<unsigned char>(32u)
+                          (busid, login_info.id, 0u, 0u, std::vector<unsigned char>(32u)
                            , std::vector<unsigned char>(256u), std::string()));
 
       OB_DIAG_REQUIRE(g, "Generated service context for starting session"
@@ -578,36 +410,14 @@ int main(int argc, char** argv)
       std::vector<fusion::vector2<std::string, std::string> >
         properties;
       properties.push_back(fusion::make_vector("offer.domain", "Demos"));
-      
-      typedef fusion::vector1<std::vector<fusion::vector2<std::string, std::string> > >
-        find_service_arguments_type;
-      typedef request_types<find_service_arguments_type> find_services_rt_type;
+
       ob_diag::service_context_list start_session_service_context;
       start_session_service_context.push_back
         (fusion::make_vector(0x42555300, empty_credential_data));
-      find_services_rt_type find_services_rt
-        (
-         (
-          giop::sequence[giop::string & giop::string]
-         )
-         , offer_registry_object_key, "findServices"
-         , find_service_arguments_type(properties), start_session_service_context);
-
-      buffer.resize(0);
-      iterator = output_iterator_type(buffer);
-      g = karma::generate(iterator, giop::compile<iiop::generator_domain>
-                          (find_services_rt.message_header_grammar_(giop::native_endian))
-                          , find_services_rt.attribute);
+      ob_diag::make_request(socket, offer_registry_object_key, "findServices"
+                            , giop::sequence[giop::string & giop::string]
+                            , fusion::make_vector(properties), start_session_service_context);
       
-      OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
-                      , "Failed generating request. This is a bug in the diagnostic tool")
-
-      boost::asio::write(socket, boost::asio::buffer(buffer)
-                         , boost::asio::transfer_all(), ec);
-
-      OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
-                      , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
-        
       reply_buffer.resize(4096);
       size = socket.read_some
         (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
@@ -680,23 +490,81 @@ int main(int argc, char** argv)
 
         session_number = fusion::at_c<1u>(credential_reset);
         bus_login_id = fusion::at_c<0u>(credential_reset);
+
+        std::cout << "Bus Login id " << bus_login_id << std::endl;
           
         {
-          std::vector<char>& challange = fusion::at_c<2u>(credential_reset);
+          std::vector<char>const& challange = fusion::at_c<2u>(credential_reset);
           EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(key, 0);
           EVP_PKEY_decrypt_init(ctx);
           ::size_t out_length = 0;
           EVP_PKEY_decrypt(ctx, 0, &out_length, (unsigned char*)&challange[0], challange.size());
           secret.resize(out_length);
+          std::cout << "Secret is " << out_length << " bytes" << std::endl;
           EVP_PKEY_decrypt(ctx, (unsigned char*)&secret[0], &out_length
                            , (unsigned char*)&challange[0], challange.size());
         }
       }
+      assert(secret.size() >= 16u);
+      secret.resize(16u);
 
-      std::vector<char> bus_call_chain;
+      ob_diag::signed_call_chain signed_call_chain;
       {
-        
-      }
+        std::vector<char> hash(32u);
+        {
+          std::vector<char> data_to_be_hashed;
+          const char operation_lit[] = "signChainFor";
+          data_to_be_hashed.reserve(22 + std::strlen(operation_lit));
+          data_to_be_hashed.push_back(2); // major version
+          data_to_be_hashed.push_back(0); // minor version
+          data_to_be_hashed.insert(data_to_be_hashed.end(), secret.begin(), secret.end()); // secret
+          data_to_be_hashed.push_back(0u); // ticket 
+          data_to_be_hashed.push_back(0u); // ticket 
+          data_to_be_hashed.push_back(0u); // ticket 
+          data_to_be_hashed.push_back(0u); // ticket 
+          data_to_be_hashed.insert(data_to_be_hashed.end(), &operation_lit[0]
+                                   , &operation_lit[0] + sizeof(operation_lit)-1);
+          SHA256((unsigned char*)&data_to_be_hashed[0], data_to_be_hashed.size()
+                 , (unsigned char*)&hash[0]);
+        }
+
+        std::vector<char> credential_data;
+        output_iterator_type iterator(credential_data);
+        g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                          (
+                           giop::endianness(giop::native_endian)
+                           [
+                            giop::string & giop::string
+                            & giop::ulong_ & giop::ulong_
+                            & +giop::octet
+                            // Signed Call Chain
+                            & +giop::octet
+                            & giop::sequence[giop::octet]
+                           ]
+                          )
+                          , fusion::make_vector
+                          (busid, login_info.id
+                           , session_number
+                           , 0u /* ticket */
+                           , hash
+                           , std::vector<char>(256u)
+                           , std::string()));
+
+        OB_DIAG_REQUIRE(g, "Generated service context for starting session"
+                        , "Failed generating context for starting session. This is a bug in the diagnostic tool")
+
+        ob_diag::service_context_list service_context;
+        service_context.push_back
+          (fusion::make_vector(0x42555300, credential_data));
+        ob_diag::make_request(socket, access_control_object_key
+                              , "signChainFor", giop::string
+                              , fusion::make_vector(bus_login_id)
+                              , service_context);
+        ob_diag::read_reply(socket
+                            , spirit::repeat(256u)[giop::octet]
+                            & giop::sequence[giop::octet]
+                            , signed_call_chain);
+      }      
 
       std::vector<char> find_services_credential_data;
 
@@ -708,6 +576,9 @@ int main(int argc, char** argv)
         data_to_be_hashed.push_back(2); // major version
         data_to_be_hashed.push_back(0); // minor version
         data_to_be_hashed.insert(data_to_be_hashed.end(), secret.begin(), secret.end()); // secret
+        data_to_be_hashed.push_back(1u); // ticket 
+        data_to_be_hashed.push_back(0u); // ticket 
+        data_to_be_hashed.push_back(0u); // ticket 
         data_to_be_hashed.push_back(0u); // ticket 
         data_to_be_hashed.insert(data_to_be_hashed.end(), &find_services_lit[0]
                                  , &find_services_lit[0] + sizeof(find_services_lit)-1);
@@ -729,50 +600,42 @@ int main(int argc, char** argv)
                            ]
                           )
                           , fusion::make_vector
-                          (busid, login_id
+                          (busid, login_info.id
                            , session_number
-                           , 0u /* ticket */
+                           , 1u /* ticket */
                            , find_services_hash
-                           , std::vector<unsigned char>(256u)
-                           , std::string()));
+                           , /*signed_call_chain.signature*/std::vector<char>(256u)
+                           , /*signed_call_chain.encoded*/std::string()));
 
       OB_DIAG_REQUIRE(g, "Generated service context for starting session"
                       , "Failed generating context for starting session. This is a bug in the diagnostic tool")
 
-      {
-        ob_diag::service_context_list create_session_service_context;
-        create_session_service_context.push_back
-          (fusion::make_vector(0x42555300, find_services_credential_data));
-        find_services_rt_type find_services_rt
-          (
-           giop::sequence[giop::string & giop::string]
-           , offer_registry_object_key, "findServices"
-           , find_service_arguments_type(properties), create_session_service_context);
+      ob_diag::service_context_list bus_session_service_context;
+      bus_session_service_context.push_back
+        (fusion::make_vector(0x42555300, find_services_credential_data));
+      ob_diag::make_request(socket, offer_registry_object_key, "findServices"
+                            , giop::sequence[giop::string & giop::string]
+                            , fusion::make_vector(properties)
+                            , bus_session_service_context);
 
-        buffer.resize(0);
-        iterator = output_iterator_type(buffer);
-        g = karma::generate(iterator, giop::compile<iiop::generator_domain>
-                            (find_services_rt.message_header_grammar_(giop::native_endian))
-                            , find_services_rt.attribute);
-      }
+      {      
+        typedef ::reference_types<std::vector<char>::iterator> reference_types;
+        reference_types reference_types_;
+        typedef reference_types::reference_attribute_type reference_arg_type;
       
-      OB_DIAG_REQUIRE(g, "Generated buffer with request with " << buffer.size() << " bytes"
-                      , "Failed generating request. This is a bug in the diagnostic tool")
+        std::vector<fusion::vector3<reference_arg_type, std::vector<fusion::vector2<std::string, std::string> >
+                                    , reference_arg_type> > offers;
+        ob_diag::read_reply(socket
+                            , giop::sequence
+                              [
+                               reference_types_.reference_grammar_
+                               & giop::sequence[giop::string & giop::string]
+                               & reference_types_.reference_grammar_
+                              ]
+                            , offers);
 
-      boost::asio::write(socket, boost::asio::buffer(buffer)
-                         , boost::asio::transfer_all(), ec);
-
-      OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
-                      , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
-        
-      reply_buffer.resize(4096);
-      size = socket.read_some
-        (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
-      reply_buffer.resize(size);
-
-      OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
-                      ,  "Failed reading with error " << ec.message())
-
+        std::cout << "Found " << offers.size() << " offers" << std::endl;
+      }
     }
     
   }

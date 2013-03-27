@@ -85,7 +85,7 @@ void make_request(boost::asio::ip::tcp::socket& socket
                   , service_context_list const& service_context = service_context_list())
 {
   typedef giop::forward_back_insert_iterator<std::vector<char> > output_iterator_type;
-  request_types<Args> rt (args_grammar, object_key, method, args);
+  request_types<Args> rt (args_grammar, object_key, method, args, service_context);
       
   std::vector<char> buffer;
   output_iterator_type iterator(buffer);
@@ -100,7 +100,7 @@ void make_request(boost::asio::ip::tcp::socket& socket
   boost::asio::write(socket, boost::asio::buffer(buffer)
                      , boost::asio::transfer_all(), ec);
 
-  OB_DIAG_REQUIRE(!ec, "Sent buffer with request"
+  OB_DIAG_REQUIRE(!ec, "Sent buffer with request for operation " << method
                   , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
 }
 
