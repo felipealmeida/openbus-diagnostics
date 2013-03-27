@@ -9,6 +9,7 @@
 #define OB_DIAG_MAKE_REQUEST_HPP
 
 #include <ob-diag/service_context_list.hpp>
+#include <ob-diag/session.hpp>
 
 #include <morbid/giop/forward_back_insert_iterator.hpp>
 #include <morbid/giop/grammars/arguments.hpp>
@@ -21,6 +22,10 @@
 #include <morbid/iiop/profile_body.hpp>
 
 #include <boost/asio.hpp>
+
+#include <openssl/rsa.h>
+#include <openssl/pem.h>
+#include <openssl/sha.h>
 
 namespace ob_diag {
 
@@ -103,6 +108,72 @@ void make_request(boost::asio::ip::tcp::socket& socket
   OB_DIAG_REQUIRE(!ec, "Sent buffer with request for operation " << method
                   , "Failed sending buffer with request with " << buffer.size() << " bytes and error " << ec.message())
 }
+
+template <typename ArgsGrammar, typename Args>
+void make_openbus_request(boost::asio::ip::tcp::socket& socket
+                          , std::vector<char> const& object_key
+                          , std::string const& method
+                          , ArgsGrammar const& args_grammar
+                          , Args const& args
+                          , std::string bus_id
+                          , std::string local_id
+                          , session& s)
+{
+  assert(s.secret.size() == 16u);
+
+  std::vector<char> hash(32u);
+  {
+    std::vector<char> buffer;
+    std::back_insert_iterator<std::vector<char> > iterator(buffer);
+    bool g = karma::generate
+      (iterator
+       ,  qi::char_
+       << qi::char_
+       << spirit::repeat(16u)[qi::char_]
+       << qi::little_dword
+       << qi::string
+       , fusion::make_vector(2, 0, s.secret, s.ticket, method));
+
+    OB_DIAG_REQUIRE(g, "Generated buffer for hashing for " << method << " with established session"
+                    , "Failed generating buffer for hashing for call to " << method
+                    << " with established session. This is a bug in the diagnostic tool")
+
+    assert(buffer.size() == 22 + method.size());
+    SHA256((unsigned char*)&buffer[0], buffer.size(), (unsigned char*)&hash[0]);
+  }
+
+  std::vector<char> credential_data;
+  giop::forward_back_insert_iterator<std::vector<char> > iterator(credential_data);
+  bool g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                           (
+                            giop::endianness(giop::native_endian)
+                            [
+                             giop::string & giop::string
+                             & giop::ulong_ & giop::ulong_
+                             & +giop::octet
+                             // Signed Call Chain
+                             & +giop::octet
+                             & giop::sequence[giop::octet]
+                            ]
+                           )
+                           , fusion::make_vector
+                           (bus_id, local_id, s.session_number
+                            , s.ticket, hash
+                            // Signed Call Chain
+                            , std::vector<char>(256u), std::string()));
+
+  OB_DIAG_REQUIRE(g, "Generated service context for call to " << method << " with established session"
+                  , "Failed generating context for call to " << method
+                  << " with established session. This is a bug in the diagnostic tool")
+
+  ++s.ticket;
+
+  ob_diag::service_context_list service_context;
+  service_context.push_back
+    (fusion::make_vector(0x42555300, credential_data)); 
+  make_request(socket, object_key, method, args_grammar, args, service_context);
+}
+
 
 }
 

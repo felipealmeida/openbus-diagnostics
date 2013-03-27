@@ -9,6 +9,7 @@
 #define OB_DIAG_READ_REPLY_HPP
 
 #include <ob-diag/service_context_list.hpp>
+#include <ob-diag/system_exception.hpp>
 
 #include <morbid/giop/forward_back_insert_iterator.hpp>
 #include <morbid/giop/grammars/arguments.hpp>
@@ -37,20 +38,15 @@ template <typename A>
 struct reply_types
 {
   typedef std::vector<char>::iterator iterator_type;
-  typedef fusion::vector3<std::string, unsigned int, unsigned int>
-    system_exception_attribute_type;
-  typedef boost::variant<system_exception_attribute_type
-                         , A> variant_attribute_type;
+  typedef boost::variant<system_exception, A> variant_attribute_type;
 
-  typedef std::vector<fusion::vector2<unsigned int, std::vector<char> > >
-    service_context_list;
   typedef fusion::vector4<service_context_list, unsigned int, unsigned int
                           , variant_attribute_type>
     reply_attribute_type;
   typedef fusion::vector1<reply_attribute_type>
     message_attribute_type;
   typedef giop::grammars::system_exception_reply_body
-    <iiop::parser_domain, iterator_type, system_exception_attribute_type>
+    <iiop::parser_domain, iterator_type, system_exception>
     system_exception_grammar;
   typedef giop::grammars::reply_1_0<iiop::parser_domain
                                     , iterator_type, reply_attribute_type>
@@ -119,8 +115,7 @@ void read_reply(boost::asio::ip::tcp::socket& socket
   typename reply_type::variant_attribute_type variant_attr
     = fusion::at_c<3u>(fusion::at_c<0u>(reply.attribute));
 
-  OB_DIAG_FAIL(/*reply_type::system_exception_attribute_type* attr = */boost::get
-               <typename reply_type::system_exception_attribute_type>(&variant_attr)
+  OB_DIAG_FAIL(boost::get<system_exception>(&variant_attr)
                , "A exception was thrown!")
 
   out = boost::get<Out>(variant_attr);
