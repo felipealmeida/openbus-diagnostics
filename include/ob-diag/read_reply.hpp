@@ -38,7 +38,7 @@ template <typename A>
 struct reply_types
 {
   typedef std::vector<char>::iterator iterator_type;
-  typedef boost::variant<system_exception, A> variant_attribute_type;
+  typedef boost::variant<system_exception, user_exception, A> variant_attribute_type;
 
   typedef fusion::vector4<service_context_list, unsigned int, unsigned int
                           , variant_attribute_type>
@@ -68,8 +68,11 @@ struct reply_types
       (
        (
         spirit::eps(phoenix::at_c<2u>(spirit::_val) == 0u)
-       &
-        args_grammar
+        & args_grammar
+       ) |
+       (
+        spirit::eps(phoenix::at_c<2u>(spirit::_val) == 1u)
+        & spirit::attr_cast<user_exception>(giop::string)
        ) |
        (
         spirit::eps(phoenix::at_c<2u>(spirit::_val) == 2u)
@@ -116,7 +119,9 @@ void read_reply(boost::asio::ip::tcp::socket& socket
     = fusion::at_c<3u>(fusion::at_c<0u>(reply.attribute));
 
   OB_DIAG_FAIL(boost::get<system_exception>(&variant_attr)
-               , "A exception was thrown!")
+               , "A system exception was thrown!")
+  OB_DIAG_FAIL(boost::get<user_exception>(&variant_attr)
+               , "A user exception was thrown!")
 
   out = boost::get<Out>(variant_attr);
 }

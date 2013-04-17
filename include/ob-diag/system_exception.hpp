@@ -21,12 +21,19 @@ struct system_exception
   unsigned int minor_code_value, completion_status;
 };
 
+struct user_exception
+{
+  user_exception() {}
+  user_exception(std::string const& exception_id)
+    : exception_id(exception_id) {}
+  std::string exception_id;
+};
+
 }
 
 BOOST_FUSION_ADAPT_STRUCT(ob_diag::system_exception
                           , (std::string, exception_id)
                             (unsigned int, minor_code_value)
                             (unsigned int, completion_status));
-
 
 #endif
