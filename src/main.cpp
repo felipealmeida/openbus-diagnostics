@@ -96,11 +96,15 @@ void profile_body_test(std::string const& hostname, unsigned short port)
   boost::asio::ip::tcp::resolver::query query
     (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
   boost::system::error_code ec;
-  boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
-  remote_endpoint.port(port);
+  boost::asio::ip::tcp::resolver::iterator remote_iterator
+    = resolver.resolve(query, ec);
 
-  OB_DIAG_REQUIRE(!ec, "Succesful querying hostname(" << hostname << ") from IIOP Profile"
+  OB_DIAG_REQUIRE(remote_iterator != boost::asio::ip::tcp::resolver::iterator()
+                  , "Succesful querying hostname(" << hostname << ") from IIOP Profile"
                   , "Querying hostname(" << hostname << ") from IIOP Profile failed with error " << ec.message() << ". Check /etc/hosts in the server for any misconfigured hostnames")
+
+  boost::asio::ip::tcp::endpoint remote_endpoint = *remote_iterator;
+  remote_endpoint.port(port);
 
   socket.connect(remote_endpoint, ec);
 
@@ -156,10 +160,14 @@ int main(int argc, char** argv)
     boost::asio::ip::tcp::resolver resolver(io_service);
     boost::asio::ip::tcp::resolver::query query
       (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
-    boost::asio::ip::tcp::endpoint remote_endpoint = *resolver.resolve(query, ec);
+    boost::asio::ip::tcp::resolver::iterator remote_iterator
+      = resolver.resolve(query, ec);
 
-    OB_DIAG_REQUIRE(!ec, "Resolving hostname was successful"
+    OB_DIAG_REQUIRE(!ec && remote_iterator != boost::asio::ip::tcp::resolver::iterator()
+                    , "Resolving hostname was successful"
                     , "Resolving hostname failed with error: " << ec.message())
+
+    boost::asio::ip::tcp::endpoint remote_endpoint = *remote_iterator;
     
     remote_endpoint.port(port);
     socket.connect(remote_endpoint, ec);
