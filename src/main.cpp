@@ -121,18 +121,66 @@ struct login_info
 BOOST_FUSION_ADAPT_STRUCT(login_info, (std::string, id)(std::string, entity)
                           (unsigned int, validity_time));
 
+struct properties_options
+{
+  std::vector<std::pair<std::string, std::string> > properties;
+};
+
+void validate(boost::any& any
+              , std::vector<std::string>& values
+              , properties_options*
+              , int)
+{
+  // Make sure no previous assignment to 'a' was made.
+  boost::program_options::validators::check_first_occurrence(any);
+  std::string v = boost::program_options::validators::get_single_string(values);
+
+  properties_options r;
+
+  std::string::iterator equal_sign = std::find(v.begin(), v.end(), '=');
+  if(equal_sign != v.end())
+    r.properties.push_back(std::make_pair(std::string(v.begin(), equal_sign)
+                                          , std::string(boost::next(equal_sign), v.end())));
+  else
+    r.properties.push_back(std::make_pair(std::string(v.begin(), equal_sign), std::string()));
+
+  any = r;
+}
+
+struct offer_info
+{
+  std::vector<std::pair<std::string, std::string> > search_properties;
+  
+  boost::shared_ptr<boost::asio::ip::tcp::socket> socket;
+
+  typedef std::vector<char>::iterator reference_iterator_type;
+  typedef ::reference_types<reference_iterator_type> reference_types;
+
+  boost::optional<reference_types::reference_attribute_type> offered_service_ref;
+  std::vector<fusion::vector2<std::string, std::string> > offer_properties;
+  boost::optional<reference_types::reference_attribute_type> offer_ref;
+
+  offer_info(properties_options const& o)
+    : search_properties(o.properties) {}
+  offer_info() {}
+};
+
 int main(int argc, char** argv)
 {
   try
   {
     boost::program_options::options_description desc("Allowed options");
-    desc.add_options()
-      ("help", "Shows this message")
-      ("host,h", boost::program_options::value<std::string>(), "Hostname of Openbus")
-      ("port,p", boost::program_options::value<unsigned short>(), "Port of Openbus")
-      ("username", boost::program_options::value<std::string>(), "Username for authentication")
-      ("password", boost::program_options::value<std::string>(), "Password for authentatication")
-      ;
+    {
+      using boost::program_options::value;
+      desc.add_options()
+        ("help", "Shows this message")
+        ("host,h", value<std::string>(), "Hostname of Openbus")
+        ("port,p", value<unsigned short>(), "Port of Openbus")
+        ("username", value<std::string>(), "Username for authentication")
+        ("password", value<std::string>(), "Password for authentatication")
+        ("track-offer", value<std::vector<properties_options> >(), "List of name=value pairs of properties for tracking offers")
+        ;
+    }
 
     boost::program_options::variables_map vm;
     boost::program_options::store(boost::program_options::parse_command_line(argc, argv, desc)
@@ -153,7 +201,7 @@ int main(int argc, char** argv)
       , password = vm["password"].as<std::string>();
 
     boost::asio::io_service io_service;
-    boost::asio::ip::tcp::socket socket(io_service, boost::asio::ip::tcp::endpoint());
+    boost::asio::ip::tcp::socket bus_socket(io_service, boost::asio::ip::tcp::endpoint());
 
     boost::system::error_code ec;
 
@@ -170,7 +218,7 @@ int main(int argc, char** argv)
     boost::asio::ip::tcp::endpoint remote_endpoint = *remote_iterator;
     
     remote_endpoint.port(port);
-    socket.connect(remote_endpoint, ec);
+    bus_socket.connect(remote_endpoint, ec);
 
     OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
                     , "Connection to hostname and port of bus failed with error: " << ec.message())
@@ -182,7 +230,7 @@ int main(int argc, char** argv)
                                 , &openbus_object_key_lit[0] + sizeof(openbus_object_key_lit)-1);
     }
 
-    ob_diag::make_request(socket, openbus_object_key, "getFacet"
+    ob_diag::make_request(bus_socket, openbus_object_key, "getFacet"
                           , giop::string
                           , fusion::make_vector
                           (std::string("IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")));
@@ -193,7 +241,7 @@ int main(int argc, char** argv)
     typedef reference_types::reference_attribute_type arguments_attribute_type;
 
     arguments_attribute_type attr;
-    ob_diag::read_reply(socket, reference_types_.reference_grammar_, attr);
+    ob_diag::read_reply(bus_socket, reference_types_.reference_grammar_, attr);
 
     OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")
                     , "Found reference for AccessControl for OpenBus"
@@ -239,18 +287,18 @@ int main(int argc, char** argv)
     std::string busid;
 
     // Reading busid attribute
-    ob_diag::make_request(socket, access_control_object_key
+    ob_diag::make_request(bus_socket, access_control_object_key
                           , "_get_busid", spirit::eps, fusion::vector0<>());
 
-    ob_diag::read_reply(socket, giop::string, busid);
+    ob_diag::read_reply(bus_socket, giop::string, busid);
 
     // Reading buskey attribute
-    ob_diag::make_request(socket, access_control_object_key
+    ob_diag::make_request(bus_socket, access_control_object_key
                           , "_get_buskey", spirit::eps, fusion::vector0<>());
 
     typedef std::vector<unsigned char> buskey_args_type;
     buskey_args_type buskey_args;
-    ob_diag::read_reply(socket, giop::sequence[giop::octet], buskey_args);
+    ob_diag::read_reply(bus_socket, giop::sequence[giop::octet], buskey_args);
 
     std::cout << "Returned encoded buskey public key with size " << buskey_args.size() << std::endl;
 
@@ -317,7 +365,7 @@ int main(int argc, char** argv)
         
     }
 
-    ob_diag::make_request(socket, access_control_object_key
+    ob_diag::make_request(bus_socket, access_control_object_key
                           , "loginByPassword"
                           , giop::string
                           & giop::sequence[giop::octet]
@@ -325,14 +373,14 @@ int main(int argc, char** argv)
                           , fusion::make_vector(username, public_key_buffer, encrypted_block));
 
     ::login_info login_info;
-    ob_diag::read_reply(socket, giop::string & giop::string & giop::ulong_, login_info);
+    ob_diag::read_reply(bus_socket, giop::string & giop::string & giop::ulong_, login_info);
 
     std::cout << "Succesfully logged in. LoginInfo.id is " << login_info.id << std::endl;
 
     std::vector<char> offer_registry_object_key;
 
     {
-      ob_diag::make_request(socket, openbus_object_key, "getFacet"
+      ob_diag::make_request(bus_socket, openbus_object_key, "getFacet"
                             , giop::string
                             , fusion::make_vector
                             (std::string("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")));
@@ -343,7 +391,7 @@ int main(int argc, char** argv)
       typedef reference_types::reference_attribute_type arguments_attribute_type;
 
       arguments_attribute_type attr;
-      ob_diag::read_reply(socket, reference_types_.reference_grammar_, attr);
+      ob_diag::read_reply(bus_socket, reference_types_.reference_grammar_, attr);
 
       OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")
                       , "Found reference for OfferRegistry for OpenBus"
@@ -382,38 +430,87 @@ int main(int argc, char** argv)
       OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
     }
 
-    std::vector<fusion::vector2<std::string, std::string> > properties;
-    properties.push_back(fusion::make_vector("offer.domain", "Demos"));
+    boost::optional<ob_diag::session> session;
+    std::vector<offer_info> tracking_offers;
+    if(vm.count("track-offer") > 0)
+    {
+      std::vector<properties_options> search_tracking_offers
+        = vm["track-offer"].as<std::vector<properties_options> >();
+      tracking_offers.resize(search_tracking_offers.size());
+      std::copy(search_tracking_offers.begin(), search_tracking_offers.end(), tracking_offers.begin());
 
-    ob_diag::session session = ob_diag::create_session
-      (socket, offer_registry_object_key, "findServices"
-       , giop::sequence[giop::string & giop::string]
-       , fusion::make_vector(properties)
-       , busid, login_info.id, key);
+      std::cout << "Tracking " << tracking_offers.size() << " offers" << std::endl;
+
+      for(std::vector<offer_info>::iterator
+            first = tracking_offers.begin()
+            , last = tracking_offers.end()
+            ;first != last; ++first)
+      {
+        std::vector<fusion::vector2<std::string, std::string> > properties;
+        for(std::vector<std::pair<std::string, std::string> >::const_iterator
+              prop_first = first->search_properties.begin()
+              , prop_last = first->search_properties.end()
+              ;prop_first != prop_last; ++prop_first)
+        {
+          std::cout << "Adding properties " << prop_first->first << '=' << prop_first->second << std::endl;
+          properties.push_back(fusion::make_vector(prop_first->first, prop_first->second));
+        }
+
+        if(!session)
+          session = ob_diag::create_session
+            (bus_socket, offer_registry_object_key, "findServices"
+             , giop::sequence[giop::string & giop::string]
+             , fusion::make_vector(properties)
+             , busid, login_info.id, key);
     
-    ob_diag::make_openbus_request(socket, offer_registry_object_key, "findServices"
-                                  , giop::sequence[giop::string & giop::string]
-                                  , fusion::make_vector(properties)
-                                  , busid, login_info.id, session);
-
-    {      
-      typedef ::reference_types<std::vector<char>::iterator> reference_types;
-      reference_types reference_types_;
-      typedef reference_types::reference_attribute_type reference_arg_type;
+        ob_diag::make_openbus_request(bus_socket, offer_registry_object_key, "findServices"
+                                      , giop::sequence[giop::string & giop::string]
+                                      , fusion::make_vector(properties)
+                                      , busid, login_info.id, *session);
       
-      std::vector<fusion::vector3<reference_arg_type, std::vector<fusion::vector2<std::string, std::string> >
-                                    , reference_arg_type> > offers;
-      ob_diag::read_reply(socket
-                          , giop::sequence
-                            [
-                             reference_types_.reference_grammar_
-                             & giop::sequence[giop::string & giop::string]
-                             & reference_types_.reference_grammar_
-                            ]
-                          , offers);
+        {      
+          typedef ::reference_types<std::vector<char>::iterator> reference_types;
+          reference_types reference_types_;
+          typedef reference_types::reference_attribute_type reference_arg_type;
+        
+          std::vector<fusion::vector3<reference_arg_type, std::vector<fusion::vector2<std::string, std::string> >
+                                      , reference_arg_type> > offers;
+          ob_diag::read_reply(bus_socket
+                              , giop::sequence
+                              [
+                               reference_types_.reference_grammar_
+                               & giop::sequence[giop::string & giop::string]
+                               & reference_types_.reference_grammar_
+                              ]
+                              , offers);
 
-      std::cout << "Found " << offers.size() << " offers" << std::endl;
+          switch(offers.size())
+          {
+          case 0:
+            std::cout << "No offers found for the following properties: " << std::endl;
+            break;
+          case 1:
+            std::cout << "Found one offer, as expected" << std::endl;
+            first->offered_service_ref = fusion::at_c<0>(offers[0]);
+            first->offer_properties = fusion::at_c<1>(offers[0]);
+            first->offer_ref = fusion::at_c<2>(offers[0]);
+            break;
+          default:
+            std::cout << "Found multiple offers" << std::endl;
+            {
+            }
+            break;            
+          }
+        }
+      }
     }
+    else
+    {
+    }
+
+    std::cout << "will wait for any changes" << std::endl;
+    
+
   }
   catch(ob_diag::require_error const&)
   {
