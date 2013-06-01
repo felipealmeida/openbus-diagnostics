@@ -118,10 +118,10 @@ void read_reply(boost::asio::ip::tcp::socket& socket
   typename reply_type::variant_attribute_type variant_attr
     = fusion::at_c<3u>(fusion::at_c<0u>(reply.attribute));
 
-  OB_DIAG_FAIL(boost::get<system_exception>(&variant_attr)
-               , "A system exception was thrown!")
-  OB_DIAG_FAIL(boost::get<user_exception>(&variant_attr)
-               , "A user exception was thrown!")
+  OB_DIAG_FAIL(system_exception* e = boost::get<system_exception>(&variant_attr)
+               , "A system exception was thrown! " << e->exception_id << " with minor code: " << e->minor_code_value)
+  OB_DIAG_FAIL(user_exception* e = boost::get<user_exception>(&variant_attr)
+               , "A user exception was thrown! " << e->exception_id)
 
   out = boost::get<Out>(variant_attr);
 }

@@ -10,6 +10,10 @@
 #include <ob-diag/read_reply.hpp>
 #include <ob-diag/create_session.hpp>
 #include <ob-diag/signed_call_chain.hpp>
+#include <ob-diag/search_offer.hpp>
+#include <ob-diag/reference_types.hpp>
+#include <ob-diag/properties_options.hpp>
+#include <ob-diag/create_connection.hpp>
 
 #include <morbid/giop/forward_back_insert_iterator.hpp>
 #include <morbid/giop/grammars/arguments.hpp>
@@ -29,9 +33,12 @@
 #include <boost/spirit/home/karma.hpp>
 #include <boost/program_options.hpp>
 #include <boost/asio.hpp>
+#include <boost/asio/steady_timer.hpp>
 #include <boost/fusion/include/vector.hpp>
 #include <boost/fusion/include/joint_view.hpp>
 #include <boost/fusion/include/as_vector.hpp>
+#include <boost/fusion/include/std_pair.hpp>
+#include <boost/bind.hpp>
 
 #include <openssl/rsa.h>
 #include <openssl/pem.h>
@@ -49,69 +56,6 @@ namespace phoenix = boost::phoenix;
 using ob_diag::request_types;
 using ob_diag::reply_types;
 
-template <typename Iterator>
-struct reference_types
-{
-  typedef typename fusion::result_of::as_vector
-  <fusion::joint_view<fusion::single_view<char> // minor version
-                      , iiop::profile_body> >::type profile_body_1_1_attr;
-
-  ior::grammar::tagged_profile<iiop::parser_domain, Iterator
-                               , ior::tagged_profile> tagged_profile;
-  iiop::grammar::profile_body_1_0<iiop::parser_domain, Iterator
-                                  , iiop::profile_body> profile_body_1_0;
-  iiop::grammar::profile_body_1_1<iiop::parser_domain, Iterator
-                                  , profile_body_1_1_attr> profile_body_1_1;
-  ior::grammar::generic_tagged_profile<iiop::parser_domain, Iterator
-                                       , boost::variant<iiop::profile_body, profile_body_1_1_attr>, 0u
-                                       > tagged_profile_body;
-
-
-  typedef fusion::vector2<std::string
-                          , std::vector
-                          <boost::variant<iiop::profile_body, profile_body_1_1_attr, ior::tagged_profile> >
-                          > reference_attribute_type;
-
-  typedef ior::grammar::ior<iiop::parser_domain, Iterator
-                            , reference_attribute_type>
-    reference_grammar;
-
-  reference_grammar reference_grammar_;
-
-  reference_types()
-    : tagged_profile_body(giop::endianness[profile_body_1_0 | profile_body_1_1])
-    , reference_grammar_(tagged_profile_body | tagged_profile)
-  {}
-};
-
-void profile_body_test(std::string const& hostname, unsigned short port)
-{
-  boost::asio::io_service io_service;
-  boost::asio::ip::tcp::socket socket(io_service, boost::asio::ip::tcp::endpoint());
-
-  std::cout << "Hostname: " << hostname
-            << " Port: " << port << std::endl;
-        
-  boost::asio::ip::tcp::resolver resolver(io_service);
-  boost::asio::ip::tcp::resolver::query query
-    (boost::asio::ip::tcp::endpoint::protocol_type::v4(), hostname, "");
-  boost::system::error_code ec;
-  boost::asio::ip::tcp::resolver::iterator remote_iterator
-    = resolver.resolve(query, ec);
-
-  OB_DIAG_REQUIRE(remote_iterator != boost::asio::ip::tcp::resolver::iterator()
-                  , "Succesful querying hostname(" << hostname << ") from IIOP Profile"
-                  , "Querying hostname(" << hostname << ") from IIOP Profile failed with error " << ec.message() << ". Check /etc/hosts in the server for any misconfigured hostnames")
-
-  boost::asio::ip::tcp::endpoint remote_endpoint = *remote_iterator;
-  remote_endpoint.port(port);
-
-  socket.connect(remote_endpoint, ec);
-
-  OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of IIOP Profile was succesful"
-                  , "Connection to hostname and port of IIOP Profile was succesful failed with error " << ec.message())
-}
-
 struct login_info
 {
   std::string id, entity;
@@ -121,49 +65,56 @@ struct login_info
 BOOST_FUSION_ADAPT_STRUCT(login_info, (std::string, id)(std::string, entity)
                           (unsigned int, validity_time));
 
-struct properties_options
+void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
+                    , boost::asio::ip::tcp::socket& socket)
 {
-  std::vector<std::pair<std::string, std::string> > properties;
-};
+  bool redo_connection = ec;
+  assert(size == 0);
+  OB_DIAG_ERR(ec, "Connection closed from bus. Reason: " << ec.message())
+  read = true;
 
-void validate(boost::any& any
-              , std::vector<std::string>& values
-              , properties_options*
-              , int)
-{
-  // Make sure no previous assignment to 'a' was made.
-  boost::program_options::validators::check_first_occurrence(any);
-  std::string v = boost::program_options::validators::get_single_string(values);
-
-  properties_options r;
-
-  std::string::iterator equal_sign = std::find(v.begin(), v.end(), '=');
-  if(equal_sign != v.end())
-    r.properties.push_back(std::make_pair(std::string(v.begin(), equal_sign)
-                                          , std::string(boost::next(equal_sign), v.end())));
-  else
-    r.properties.push_back(std::make_pair(std::string(v.begin(), equal_sign), std::string()));
-
-  any = r;
+  if(!ec)
+  {
+    boost::asio::socket_base::bytes_readable command(true);
+    socket.io_control(command);
+    std::size_t bytes_readable = command.get();
+    std::cout << "bytes readable " << bytes_readable << std::endl;
+    OB_DIAG_ERR (bytes_readable == 0, "Connection was gracefully closed")
+    if(bytes_readable == 0) redo_connection = true;
+  }
+  if(redo_connection)
+  {
+    std::cout << "Should redo connection to bus" << std::endl;
+    OB_DIAG_FAIL (true, "Not implemented yet")
+  }
 }
 
-struct offer_info
+ void wait_offer_error(boost::system::error_code ec, std::size_t size, ob_diag::offer_info& oi
+                      , boost::asio::ip::tcp::socket& bus_socket
+                      , ob_diag::session& session)
 {
-  std::vector<std::pair<std::string, std::string> > search_properties;
-  
-  boost::shared_ptr<boost::asio::ip::tcp::socket> socket;
+  bool redo_connection = ec;
+  assert(size == 0);
+  OB_DIAG_ERR(ec, "Connection closed from offer. Reason: " << ec.message())
 
-  typedef std::vector<char>::iterator reference_iterator_type;
-  typedef ::reference_types<reference_iterator_type> reference_types;
-
-  boost::optional<reference_types::reference_attribute_type> offered_service_ref;
-  std::vector<fusion::vector2<std::string, std::string> > offer_properties;
-  boost::optional<reference_types::reference_attribute_type> offer_ref;
-
-  offer_info(properties_options const& o)
-    : search_properties(o.properties) {}
-  offer_info() {}
-};
+  if(!ec)
+  {
+    boost::asio::socket_base::bytes_readable command(true);
+    oi.socket->io_control(command);
+    std::size_t bytes_readable = command.get();
+    std::cout << "bytes readable " << bytes_readable << std::endl;
+    OB_DIAG_ERR (bytes_readable == 0, "Connection was gracefully closed")
+    if(bytes_readable == 0) redo_connection = true;
+  }
+  if(redo_connection)
+  {
+    std::cout << "Should redo connection" << std::endl;
+    oi.socket.reset();
+    oi.offered_service_ref = boost::none;
+    oi.offer_properties.clear();
+    oi.offer_ref = boost::none;
+  }
+}
 
 int main(int argc, char** argv)
 {
@@ -178,7 +129,8 @@ int main(int argc, char** argv)
         ("port,p", value<unsigned short>(), "Port of Openbus")
         ("username", value<std::string>(), "Username for authentication")
         ("password", value<std::string>(), "Password for authentatication")
-        ("track-offer", value<std::vector<properties_options> >(), "List of name=value pairs of properties for tracking offers")
+        ("track-offer", value<std::vector<ob_diag::properties_options> >()
+         , "List of name=value pairs of properties for tracking offers")
         ;
     }
 
@@ -236,7 +188,7 @@ int main(int argc, char** argv)
                           (std::string("IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")));
 
     typedef std::vector<char>::iterator iterator_type;
-    typedef ::reference_types<iterator_type> reference_types;
+    typedef ob_diag::reference_types<iterator_type> reference_types;
     reference_types reference_types_;
     typedef reference_types::reference_attribute_type arguments_attribute_type;
 
@@ -259,7 +211,7 @@ int main(int argc, char** argv)
       if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
       {
         std::cout << "IIOP Profile Body" << std::endl;
-        profile_body_test(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p));
+        ob_diag::create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
         if(access_control_object_key.empty())
           access_control_object_key = fusion::at_c<2u>(*p);
         has_iiop_profile = true;
@@ -268,7 +220,7 @@ int main(int argc, char** argv)
               = boost::get<reference_types::profile_body_1_1_attr>(&*first))
       {
         std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
-        profile_body_test(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p));
+        ob_diag::create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
         if(access_control_object_key.empty())
           access_control_object_key = fusion::at_c<3u>(*p);
         has_iiop_profile = true;
@@ -386,7 +338,7 @@ int main(int argc, char** argv)
                             (std::string("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")));
 
       typedef std::vector<char>::iterator iterator_type;
-      typedef ::reference_types<iterator_type> reference_types;
+      typedef ob_diag::reference_types<iterator_type> reference_types;
       reference_types reference_types_;
       typedef reference_types::reference_attribute_type arguments_attribute_type;
 
@@ -407,7 +359,7 @@ int main(int argc, char** argv)
         if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
         {
           std::cout << "IIOP Profile Body" << std::endl;
-          profile_body_test(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p));
+          ob_diag::create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
           if(offer_registry_object_key.empty())
             offer_registry_object_key = fusion::at_c<2u>(*p);
           has_iiop_profile = true;
@@ -416,7 +368,7 @@ int main(int argc, char** argv)
                 = boost::get<reference_types::profile_body_1_1_attr>(&*first))
         {
           std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
-          profile_body_test(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p));
+          ob_diag::create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
           if(offer_registry_object_key.empty())
             offer_registry_object_key = fusion::at_c<3u>(*p);
           has_iiop_profile = true;
@@ -431,77 +383,31 @@ int main(int argc, char** argv)
     }
 
     boost::optional<ob_diag::session> session;
-    std::vector<offer_info> tracking_offers;
+    std::vector<ob_diag::offer_info> tracking_offers;
     if(vm.count("track-offer") > 0)
     {
-      std::vector<properties_options> search_tracking_offers
-        = vm["track-offer"].as<std::vector<properties_options> >();
+      std::vector<ob_diag::properties_options> search_tracking_offers
+        = vm["track-offer"].as<std::vector<ob_diag::properties_options> >();
       tracking_offers.resize(search_tracking_offers.size());
       std::copy(search_tracking_offers.begin(), search_tracking_offers.end(), tracking_offers.begin());
 
       std::cout << "Tracking " << tracking_offers.size() << " offers" << std::endl;
 
-      for(std::vector<offer_info>::iterator
+      for(std::vector<ob_diag::offer_info>::iterator
             first = tracking_offers.begin()
             , last = tracking_offers.end()
             ;first != last; ++first)
       {
-        std::vector<fusion::vector2<std::string, std::string> > properties;
-        for(std::vector<std::pair<std::string, std::string> >::const_iterator
-              prop_first = first->search_properties.begin()
-              , prop_last = first->search_properties.end()
-              ;prop_first != prop_last; ++prop_first)
-        {
-          std::cout << "Adding properties " << prop_first->first << '=' << prop_first->second << std::endl;
-          properties.push_back(fusion::make_vector(prop_first->first, prop_first->second));
-        }
-
         if(!session)
           session = ob_diag::create_session
             (bus_socket, offer_registry_object_key, "findServices"
              , giop::sequence[giop::string & giop::string]
-             , fusion::make_vector(properties)
+             , fusion::make_vector(first->search_properties)
              , busid, login_info.id, key);
-    
-        ob_diag::make_openbus_request(bus_socket, offer_registry_object_key, "findServices"
-                                      , giop::sequence[giop::string & giop::string]
-                                      , fusion::make_vector(properties)
-                                      , busid, login_info.id, *session);
-      
-        {      
-          typedef ::reference_types<std::vector<char>::iterator> reference_types;
-          reference_types reference_types_;
-          typedef reference_types::reference_attribute_type reference_arg_type;
         
-          std::vector<fusion::vector3<reference_arg_type, std::vector<fusion::vector2<std::string, std::string> >
-                                      , reference_arg_type> > offers;
-          ob_diag::read_reply(bus_socket
-                              , giop::sequence
-                              [
-                               reference_types_.reference_grammar_
-                               & giop::sequence[giop::string & giop::string]
-                               & reference_types_.reference_grammar_
-                              ]
-                              , offers);
+        search_offer(bus_socket, io_service, offer_registry_object_key
+                     , busid, *session, login_info.id, key, *first);
 
-          switch(offers.size())
-          {
-          case 0:
-            std::cout << "No offers found for the following properties: " << std::endl;
-            break;
-          case 1:
-            std::cout << "Found one offer, as expected" << std::endl;
-            first->offered_service_ref = fusion::at_c<0>(offers[0]);
-            first->offer_properties = fusion::at_c<1>(offers[0]);
-            first->offer_ref = fusion::at_c<2>(offers[0]);
-            break;
-          default:
-            std::cout << "Found multiple offers" << std::endl;
-            {
-            }
-            break;            
-          }
-        }
       }
     }
     else
@@ -509,8 +415,53 @@ int main(int argc, char** argv)
     }
 
     std::cout << "will wait for any changes" << std::endl;
-    
+    bool bus_read = false;
+    bus_socket.async_read_some(boost::asio::null_buffers()
+                               , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read), boost::ref(bus_socket)));
 
+    for(std::vector<ob_diag::offer_info>::iterator offer_first = tracking_offers.begin()
+          , offer_last = tracking_offers.end()
+          ; offer_first != offer_last; ++offer_first)
+    {
+      if(offer_first->socket)
+      {
+        assert(!!session);
+        offer_first->socket->async_read_some(boost::asio::null_buffers()
+                                             , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
+                                                           , boost::ref(bus_socket), boost::ref(*session)));
+      }
+    }
+
+    do
+    {
+
+      boost::asio::steady_timer timer(io_service, boost::chrono::seconds(5));
+      
+      timer.async_wait(boost::bind(&boost::asio::io_service::stop, boost::ref(io_service)));
+
+      io_service.run();
+      io_service.reset();
+      std::cout << "Waited" << std::endl;
+
+      for(std::vector<ob_diag::offer_info>::iterator offer_first = tracking_offers.begin()
+            , offer_last = tracking_offers.end()
+            ; offer_first != offer_last; ++offer_first)
+      {
+        if(!offer_first->socket)
+        {
+          std::cout << "Search again" << std::endl;
+        }
+      }
+
+      if(bus_read)
+      {
+        bus_read = false;
+        bus_socket.async_read_some(boost::asio::null_buffers()
+                                   , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read)
+                                                 , boost::ref(bus_socket)));
+      }      
+    }
+    while(true);
   }
   catch(ob_diag::require_error const&)
   {

@@ -37,11 +37,17 @@ struct require_error : std::exception
     std::cout << MSG_WARN << std::endl;                  \
   }
 
-#define OB_DIAG_FAIL(COND, MSG_ERR)        \
+#define OB_DIAG_FAIL(COND, MSG_ERR)                   \
   if(COND)                                            \
   {                                                   \
     std::cout << MSG_ERR << std::endl;                  \
     throw ::ob_diag::require_error();                    \
+  }
+
+#define OB_DIAG_ERR(COND, MSG_ERR)                    \
+  if(COND)                                            \
+  {                                                   \
+    std::cout << MSG_ERR << std::endl;                \
   }
 
 #endif
