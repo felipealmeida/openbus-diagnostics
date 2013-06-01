@@ -408,7 +408,6 @@ int main(int argc, char** argv)
         search_offer(bus_socket, io_service, access_control_object_key
                      , offer_registry_object_key, busid, *session, login_info.id, key
                      , *first);
-
       }
     }
     else
@@ -451,6 +450,10 @@ int main(int argc, char** argv)
         if(!offer_first->socket)
         {
           std::cout << "Search again" << std::endl;
+          
+          search_offer(bus_socket, io_service, access_control_object_key
+                       , offer_registry_object_key, busid, *session, login_info.id, key
+                       , *offer_first);
         }
       }
 

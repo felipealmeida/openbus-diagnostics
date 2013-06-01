@@ -71,7 +71,7 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
   switch(offers.size())
   {
   case 0:
-    std::cout << "No offers found for the following properties: " << std::endl;
+    OB_DIAG_ERR(true, "No offers found for the following properties: ")
     break;
   case 1:
     std::cout << "Found one offer, as expected" << std::endl;
