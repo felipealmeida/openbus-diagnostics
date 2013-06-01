@@ -28,10 +28,15 @@ struct offer_info
   typedef std::vector<char>::iterator reference_iterator_type;
   typedef ob_diag::reference_types<reference_iterator_type> reference_types;
 
-  boost::shared_ptr<boost::asio::ip::tcp::socket> socket;
-  boost::optional<reference_types::reference_attribute_type> offered_service_ref;
-  std::vector<fusion::vector2<std::string, std::string> > offer_properties;
-  boost::optional<reference_types::reference_attribute_type> offer_ref;
+  struct offer
+  {
+    boost::shared_ptr<boost::asio::ip::tcp::socket> socket;
+    boost::optional<reference_types::reference_attribute_type> offered_service_ref;
+    std::vector<fusion::vector2<std::string, std::string> > offer_properties;
+    boost::optional<reference_types::reference_attribute_type> offer_ref;
+  };
+
+  std::vector<offer> offers;
 
   offer_info(properties_options const& o)
     : search_properties(o.properties) {}
@@ -57,8 +62,11 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
   reference_types reference_types_;
   typedef reference_types::reference_attribute_type reference_arg_type;
         
-  std::vector<fusion::vector3<reference_arg_type, std::vector<fusion::vector2<std::string, std::string> >
-                              , reference_arg_type> > offers;
+  typedef std::vector<fusion::vector3
+                      <reference_arg_type
+                       , std::vector<fusion::vector2<std::string, std::string> >
+                       , reference_arg_type> > offers_type;
+  offers_type offers;
   ob_diag::read_reply(bus_socket
                       , giop::sequence
                       [
@@ -74,20 +82,30 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
     OB_DIAG_ERR(true, "No offers found for the following properties: ")
     break;
   case 1:
-    std::cout << "Found one offer, as expected" << std::endl;
-    oi.offered_service_ref = fusion::at_c<0>(offers[0]);
-    oi.offer_properties = fusion::at_c<1>(offers[0]);
-    oi.offer_ref = fusion::at_c<2>(offers[0]);
+    if (true)
+      std::cout << "Found one offer, as expected" << std::endl;
+    else
+  default:
+      std::cout << "Found multiple offers" << std::endl;
 
+
+    for(offers_type::const_iterator offer_first = offers.begin()
+          , offer_last = offers.end();offer_first != offer_last;++offer_first)
     {
+      offer_info::offer offer;
+      offer.offered_service_ref = fusion::at_c<0>(offers[0]);
+      offer.offer_properties = fusion::at_c<1>(offers[0]);
+      offer.offer_ref = fusion::at_c<2>(offers[0]);
+
       bool has_iiop_profile = false;
       
       std::vector<char> object_key;
       typedef std::vector
         <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
                         , ior::tagged_profile> > profiles_type;
-      for(profiles_type::const_iterator profile_first = fusion::at_c<1u>(*oi.offered_service_ref).begin()
-            , profile_last = fusion::at_c<1u>(*oi.offered_service_ref).end()
+      for(profiles_type::const_iterator profile_first = fusion::at_c<1u>
+            (*offer.offered_service_ref).begin()
+            , profile_last = fusion::at_c<1u>(*offer.offered_service_ref).end()
             ; profile_first != profile_last; ++profile_first)
       {
         if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*profile_first))
@@ -97,7 +115,7 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
             = create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
           if(!has_iiop_profile)
           {
-            oi.socket = socket;
+            offer.socket = socket;
             object_key = fusion::at_c<2u>(*p);
           }
           has_iiop_profile = true;
@@ -110,7 +128,7 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
             = create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
           if(!has_iiop_profile)
           {
-            oi.socket = socket;
+            offer.socket = socket;
             object_key = fusion::at_c<3u>(*p);
           }
           has_iiop_profile = true;
@@ -120,13 +138,15 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
           std::cout << "Other Tagged Profiles" << std::endl;
         }
       }
+
+      oi.offers.push_back(offer);
       
       OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
 
       std::cout << "Creating session to service" << std::endl;
-        
+
       ob_diag::session session = ob_diag::create_session
-        (*oi.socket, object_key, "_non_existent"
+        (*oi.offers.back().socket, object_key, "_non_existent"
          , spirit::eps
          , fusion::vector0<>()
          , busid, login_info_id, key);
@@ -134,33 +154,32 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
       std::cout << "SignChainFor" << std::endl;
 
       make_openbus_request(bus_socket, access_control_object_key, "signChainFor"
-                           , giop::string, fusion::make_vector(/**/session.remote_id/**//*login_info_id*/)
+                           , giop::string, fusion::make_vector(session.remote_id)
                            , busid, login_info_id, bus_session);
 
       std::cout << "reading reply" << std::endl;
 
-      fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> > signed_call_chain;
-      read_reply(bus_socket, spirit::repeat(256u)[giop::octet] & giop::sequence[giop::octet], signed_call_chain);
+      fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> >
+        signed_call_chain;
+      read_reply(bus_socket
+                 , spirit::repeat(256u)[giop::octet]
+                 & giop::sequence[giop::octet]
+                 , signed_call_chain);
 
       std::cout << "Making actual call" << std::endl;
 
       bool non_existent;
-      make_openbus_request(*oi.socket, object_key, "_non_existent"
+      make_openbus_request(*oi.offers.back().socket, object_key, "_non_existent"
                            , spirit::eps, fusion::vector0<>()
                            , busid, login_info_id, session
                            , signed_call_chain);
 
-      read_reply(*oi.socket, giop::bool_, non_existent);
+      read_reply(*oi.offers.back().socket, giop::bool_, non_existent);
 
       OB_DIAG_FAIL(non_existent, "ORB complained that object doesn't exist");
     }
             
     break;
-  default:
-    std::cout << "Found multiple offers" << std::endl;
-    {
-    }
-    break;            
   }
 }
 

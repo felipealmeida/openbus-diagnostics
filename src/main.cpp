@@ -89,9 +89,11 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   }
 }
 
- void wait_offer_error(boost::system::error_code ec, std::size_t size, ob_diag::offer_info& oi
-                      , boost::asio::ip::tcp::socket& bus_socket
-                      , ob_diag::session& session)
+ void wait_offer_error(boost::system::error_code ec, std::size_t size
+                       , ob_diag::offer_info& oi
+                       , ob_diag::offer_info::offer& offer
+                       , boost::asio::ip::tcp::socket& bus_socket
+                       , ob_diag::session& session)
 {
   bool redo_connection = ec;
   assert(size == 0);
@@ -100,7 +102,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   if(!ec)
   {
     boost::asio::socket_base::bytes_readable command(true);
-    oi.socket->io_control(command);
+    oi.offers[0].socket->io_control(command);
     std::size_t bytes_readable = command.get();
     std::cout << "bytes readable " << bytes_readable << std::endl;
     OB_DIAG_ERR (bytes_readable == 0, "Connection was gracefully closed")
@@ -109,10 +111,10 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   if(redo_connection)
   {
     std::cout << "Should redo connection" << std::endl;
-    oi.socket.reset();
-    oi.offered_service_ref = boost::none;
-    oi.offer_properties.clear();
-    oi.offer_ref = boost::none;
+    offer.socket.reset();
+    offer.offered_service_ref = boost::none;
+    offer.offer_properties.clear();
+    offer.offer_ref = boost::none;
   }
 }
 
@@ -423,12 +425,17 @@ int main(int argc, char** argv)
           , offer_last = tracking_offers.end()
           ; offer_first != offer_last; ++offer_first)
     {
-      if(offer_first->socket)
+      for(std::vector<ob_diag::offer_info::offer>::iterator
+            first = offer_first->offers.begin()
+            , last = offer_first->offers.end()
+            ;first != last;++first)
       {
         assert(!!session);
-        offer_first->socket->async_read_some(boost::asio::null_buffers()
-                                             , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
-                                                           , boost::ref(bus_socket), boost::ref(*session)));
+        first->socket->async_read_some
+          (boost::asio::null_buffers()
+           , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
+                         , boost::ref(*first)
+                         , boost::ref(bus_socket), boost::ref(*session)));
       }
     }
 
@@ -447,7 +454,7 @@ int main(int argc, char** argv)
             , offer_last = tracking_offers.end()
             ; offer_first != offer_last; ++offer_first)
       {
-        if(!offer_first->socket)
+        if(offer_first->offers.empty() || !offer_first->offers[0].socket)
         {
           std::cout << "Search again" << std::endl;
           
