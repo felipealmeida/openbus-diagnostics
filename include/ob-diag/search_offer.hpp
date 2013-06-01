@@ -97,7 +97,7 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
       offer.offer_properties = fusion::at_c<1>(offers[0]);
       offer.offer_ref = fusion::at_c<2>(offers[0]);
 
-      bool has_iiop_profile = false;
+      bool has_iiop_profile = false, has_functional_iiop_profile = false;
       
       std::vector<char> object_key;
       typedef std::vector
@@ -111,12 +111,20 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
         if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*profile_first))
         {
           std::cout << "IIOP Profile Body" << std::endl;
-          boost::shared_ptr<boost::asio::ip::tcp::socket> socket
-            = create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
-          if(!has_iiop_profile)
+          try
           {
-            offer.socket = socket;
-            object_key = fusion::at_c<2u>(*p);
+            boost::shared_ptr<boost::asio::ip::tcp::socket> socket
+              = create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
+            if(!has_iiop_profile)
+            {
+              offer.socket = socket;
+              object_key = fusion::at_c<2u>(*p);
+            }
+            has_functional_iiop_profile = true;
+          }
+          catch(ob_diag::require_error const&)
+          {
+            OB_DIAG_ERR(true, "Connection to profile in IIOP failed")
           }
           has_iiop_profile = true;
         }
@@ -124,12 +132,20 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
                 = boost::get<reference_types::profile_body_1_1_attr>(&*profile_first))
         {
           std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
-          boost::shared_ptr<boost::asio::ip::tcp::socket> socket
-            = create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
-          if(!has_iiop_profile)
+          try
           {
-            offer.socket = socket;
-            object_key = fusion::at_c<3u>(*p);
+            boost::shared_ptr<boost::asio::ip::tcp::socket> socket
+              = create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
+            if(!has_iiop_profile)
+            {
+              offer.socket = socket;
+              object_key = fusion::at_c<3u>(*p);
+            }
+            has_functional_iiop_profile = true;
+          }
+          catch(ob_diag::require_error const&)
+          {
+            OB_DIAG_ERR(true, "Connection to profile in IIOP failed")
           }
           has_iiop_profile = true;
         }
@@ -141,7 +157,11 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
 
       oi.offers.push_back(offer);
       
-      OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
+      OB_DIAG_ERR(!has_functional_iiop_profile, "IOR has no IIOP Profile bodies that can be contacted. Can't communicate through TCP to this target")
+      OB_DIAG_ERR(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
+
+      if(!has_functional_iiop_profile)
+        continue;
 
       std::cout << "Creating session to service" << std::endl;
 
@@ -176,7 +196,7 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
 
       read_reply(*oi.offers.back().socket, giop::bool_, non_existent);
 
-      OB_DIAG_FAIL(non_existent, "ORB complained that object doesn't exist");
+      OB_DIAG_ERROR(non_existent, "ORB complained that object doesn't exist");
     }
             
     break;

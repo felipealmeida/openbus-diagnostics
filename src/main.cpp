@@ -91,7 +91,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
 
  void wait_offer_error(boost::system::error_code ec, std::size_t size
                        , ob_diag::offer_info& oi
-                       , ob_diag::offer_info::offer& offer
+                       , std::vector<ob_diag::offer_info::offer>::iterator offer_iter
                        , boost::asio::ip::tcp::socket& bus_socket
                        , ob_diag::session& session)
 {
@@ -102,7 +102,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   if(!ec)
   {
     boost::asio::socket_base::bytes_readable command(true);
-    oi.offers[0].socket->io_control(command);
+    offer_iter->socket->io_control(command);
     std::size_t bytes_readable = command.get();
     std::cout << "bytes readable " << bytes_readable << std::endl;
     OB_DIAG_ERR (bytes_readable == 0, "Connection was gracefully closed")
@@ -111,10 +111,10 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   if(redo_connection)
   {
     std::cout << "Should redo connection" << std::endl;
-    offer.socket.reset();
-    offer.offered_service_ref = boost::none;
-    offer.offer_properties.clear();
-    offer.offer_ref = boost::none;
+    offer_iter->socket.reset();
+    offer_iter->offered_service_ref = boost::none;
+    offer_iter->offer_properties.clear();
+    offer_iter->offer_ref = boost::none;
   }
 }
 
@@ -431,11 +431,12 @@ int main(int argc, char** argv)
             ;first != last;++first)
       {
         assert(!!session);
-        first->socket->async_read_some
-          (boost::asio::null_buffers()
-           , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
-                         , boost::ref(*first)
-                         , boost::ref(bus_socket), boost::ref(*session)));
+        if(first->socket)
+          first->socket->async_read_some
+            (boost::asio::null_buffers()
+             , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
+                           , boost::ref(first)
+                           , boost::ref(bus_socket), boost::ref(*session)));
       }
     }
 
