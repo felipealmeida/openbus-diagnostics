@@ -117,7 +117,10 @@ void make_openbus_request(boost::asio::ip::tcp::socket& socket
                           , Args const& args
                           , std::string bus_id
                           , std::string local_id
-                          , session& s)
+                          , session& s
+                          , fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> > signed_call_chain
+                          = fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> >
+                          (std::vector<unsigned char>(256u), std::vector<unsigned char>()))
 {
   assert(s.secret.size() == 16u);
 
@@ -160,7 +163,7 @@ void make_openbus_request(boost::asio::ip::tcp::socket& socket
                            (bus_id, local_id, s.session_number
                             , s.ticket, hash
                             // Signed Call Chain
-                            , std::vector<char>(256u), std::string()));
+                            , fusion::at_c<0u>(signed_call_chain), fusion::at_c<1u>(signed_call_chain)));
 
   OB_DIAG_REQUIRE(g, "Generated service context for call to " << method << " with established session"
                   , "Failed generating context for call to " << method
@@ -173,7 +176,6 @@ void make_openbus_request(boost::asio::ip::tcp::socket& socket
     (fusion::make_vector(0x42555300, credential_data)); 
   make_request(socket, object_key, method, args_grammar, args, service_context);
 }
-
 
 }
 

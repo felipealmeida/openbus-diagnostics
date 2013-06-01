@@ -40,7 +40,8 @@ struct offer_info
 
 void search_offer(boost::asio::ip::tcp::socket& bus_socket
                   , boost::asio::io_service& io_service
-                  , std::vector<char> offer_registry_object_key
+                  , std::vector<char>const& access_control_object_key
+                  , std::vector<char>const& offer_registry_object_key
                   , std::string const& busid
                   , ob_diag::session& bus_session
                   , std::string const& login_info_id
@@ -130,12 +131,24 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
          , fusion::vector0<>()
          , busid, login_info_id, key);
 
+      std::cout << "SignChainFor" << std::endl;
+
+      make_openbus_request(bus_socket, access_control_object_key, "signChainFor"
+                           , giop::string, fusion::make_vector(/**/session.remote_id/**//*login_info_id*/)
+                           , busid, login_info_id, bus_session);
+
+      std::cout << "reading reply" << std::endl;
+
+      fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> > signed_call_chain;
+      read_reply(bus_socket, spirit::repeat(256u)[giop::octet] & giop::sequence[giop::octet], signed_call_chain);
+
       std::cout << "Making actual call" << std::endl;
 
       bool non_existent;
       make_openbus_request(*oi.socket, object_key, "_non_existent"
                            , spirit::eps, fusion::vector0<>()
-                           , busid, login_info_id, session);
+                           , busid, login_info_id, session
+                           , signed_call_chain);
 
       read_reply(*oi.socket, giop::bool_, non_existent);
 
