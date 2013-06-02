@@ -11,6 +11,7 @@
 #include <ob-diag/session.hpp>
 #include <ob-diag/make_request.hpp>
 #include <ob-diag/read_system_exception.hpp>
+#include <ob-diag/reference_connection.hpp>
 
 namespace ob_diag {
 
@@ -102,6 +103,18 @@ session create_session(boost::asio::ip::tcp::socket& socket
 
   return session(fusion::at_c<0u>(credential_reset)
                  , fusion::at_c<1u>(credential_reset), secret);
+}
+
+template <typename ArgsGrammar, typename Args>
+session create_session(reference_connection const& ref_c
+                       , std::string const& method
+                       , ArgsGrammar const& args_grammar
+                       , Args const& args
+                       , std::string const& bus_id
+                       , std::string const& login_id
+                       , EVP_PKEY* key)
+{
+  return create_session(*ref_c.socket, ref_c.object_key, method, args_grammar, args, bus_id, login_id, key);
 }
 
 }

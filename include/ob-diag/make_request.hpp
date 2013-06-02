@@ -10,6 +10,7 @@
 
 #include <ob-diag/service_context_list.hpp>
 #include <ob-diag/session.hpp>
+#include <ob-diag/reference_connection.hpp>
 
 #include <morbid/giop/forward_back_insert_iterator.hpp>
 #include <morbid/giop/grammars/arguments.hpp>
@@ -175,6 +176,32 @@ void make_openbus_request(boost::asio::ip::tcp::socket& socket
   service_context.push_back
     (fusion::make_vector(0x42555300, credential_data)); 
   make_request(socket, object_key, method, args_grammar, args, service_context);
+}
+
+template <typename ArgsGrammar, typename Args>
+void make_request(reference_connection const& ref_c
+                  , std::string const& method
+                  , ArgsGrammar const& args_grammar
+                  , Args const& args
+                  , service_context_list const& service_context = service_context_list())
+{
+  make_request(*ref_c.socket, ref_c.object_key, method, args_grammar, args, service_context);
+}
+
+template <typename ArgsGrammar, typename Args>
+void make_openbus_request(reference_connection const& ref_c
+                          , std::string const& method
+                          , ArgsGrammar const& args_grammar
+                          , Args const& args
+                          , std::string bus_id
+                          , std::string local_id
+                          , session& s
+                          , fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> > signed_call_chain
+                          = fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> >
+                          (std::vector<unsigned char>(256u), std::vector<unsigned char>()))
+{
+  make_openbus_request(*ref_c.socket, ref_c.object_key, method, args_grammar, args, bus_id
+                       , local_id, s, signed_call_chain);
 }
 
 }

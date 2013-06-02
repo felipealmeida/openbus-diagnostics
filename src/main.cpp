@@ -204,64 +204,30 @@ int main(int argc, char** argv)
                     , "Found reference for AccessControl for OpenBus"
                     , "Expected reference for AccessControl, found instead reference to " << fusion::at_c<0u>(attr))
 
-    bool has_iiop_profile = false;
-    std::vector<char> access_control_object_key;
-
-    typedef std::vector
-      <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
-                      , ior::tagged_profile> > profiles_type;
-    for(profiles_type::const_iterator first = fusion::at_c<1u>(attr).begin()
-          , last = fusion::at_c<1u>(attr).end(); first != last; ++first)
-    {
-      if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
-      {
-        std::cout << "IIOP Profile Body" << std::endl;
-        ob_diag::create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
-        if(access_control_object_key.empty())
-          access_control_object_key = fusion::at_c<2u>(*p);
-        has_iiop_profile = true;
-      }
-      else if(reference_types::profile_body_1_1_attr const* p
-              = boost::get<reference_types::profile_body_1_1_attr>(&*first))
-      {
-        std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
-        ob_diag::create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
-        if(access_control_object_key.empty())
-          access_control_object_key = fusion::at_c<3u>(*p);
-        has_iiop_profile = true;
-      }
-      else
-      {
-        std::cout << "Other Tagged Profiles" << std::endl;
-      }
-    }
-
-    OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
-
-    OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
-                    , "Connection to hostname and port of bus failed with error: " << ec.message())
+    ob_diag::reference_connection access_control_connection
+      = ob_diag::create_connection_ref(fusion::at_c<1>(attr), io_service);
 
     boost::optional<ob_diag::session> session;
     std::vector<ob_diag::offer_info> tracking_offers;
     std::string busid;
-    std::vector<char> offer_registry_object_key;
+    ob_diag::reference_connection offer_registry_connection;
     ::login_info login_info;
     EVP_PKEY* key = 0;
     if(vm.count("track-offer") > 0)
     {
       // Reading busid attribute
-      ob_diag::make_request(bus_socket, access_control_object_key
+      ob_diag::make_request(access_control_connection
                             , "_get_busid", spirit::eps, fusion::vector0<>());
       
-      ob_diag::read_reply(bus_socket, giop::string, busid);
+      ob_diag::read_reply(access_control_connection, giop::string, busid);
 
       // Reading buskey attribute
-      ob_diag::make_request(bus_socket, access_control_object_key
+      ob_diag::make_request(access_control_connection
                             , "_get_buskey", spirit::eps, fusion::vector0<>());
 
       typedef std::vector<unsigned char> buskey_args_type;
       buskey_args_type buskey_args;
-      ob_diag::read_reply(bus_socket, giop::sequence[giop::octet], buskey_args);
+      ob_diag::read_reply(access_control_connection, giop::sequence[giop::octet], buskey_args);
 
       std::cout << "Returned encoded buskey public key with size " << buskey_args.size() << std::endl;
 
@@ -329,14 +295,14 @@ int main(int argc, char** argv)
         }
       }
 
-      ob_diag::make_request(bus_socket, access_control_object_key
+      ob_diag::make_request(access_control_connection
                             , "loginByPassword"
                             , giop::string
                             & giop::sequence[giop::octet]
                             & +giop::octet
                             , fusion::make_vector(username, public_key_buffer, encrypted_block));
 
-      ob_diag::read_reply(bus_socket, giop::string & giop::string & giop::ulong_, login_info);
+      ob_diag::read_reply(access_control_connection, giop::string & giop::string & giop::ulong_, login_info);
 
       std::cout << "Succesfully logged in. LoginInfo.id is " << login_info.id << std::endl;
 
@@ -359,37 +325,7 @@ int main(int argc, char** argv)
                         , "Found reference for OfferRegistry for OpenBus"
                         , "Expected reference for OfferRegistry, found instead reference to " << fusion::at_c<0u>(attr))
 
-        bool has_iiop_profile = false;
-        typedef std::vector
-          <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
-                          , ior::tagged_profile> > profiles_type;
-        for(profiles_type::const_iterator first = fusion::at_c<1u>(attr).begin()
-              , last = fusion::at_c<1u>(attr).end(); first != last; ++first)
-        {
-          if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
-          {
-            std::cout << "IIOP Profile Body" << std::endl;
-            ob_diag::create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
-            if(offer_registry_object_key.empty())
-              offer_registry_object_key = fusion::at_c<2u>(*p);
-            has_iiop_profile = true;
-          }
-          else if(reference_types::profile_body_1_1_attr const* p
-                  = boost::get<reference_types::profile_body_1_1_attr>(&*first))
-          {
-            std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
-            ob_diag::create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
-            if(offer_registry_object_key.empty())
-              offer_registry_object_key = fusion::at_c<3u>(*p);
-            has_iiop_profile = true;
-          }
-          else
-          {
-            std::cout << "Other Tagged Profiles" << std::endl;
-          }
-        }
-
-        OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
+        offer_registry_connection = ob_diag::create_connection_ref(fusion::at_c<1>(attr), io_service);
       }
 
       std::vector<ob_diag::properties_options> search_tracking_offers
@@ -406,14 +342,13 @@ int main(int argc, char** argv)
       {
         if(!session)
           session = ob_diag::create_session
-            (bus_socket, offer_registry_object_key, "findServices"
+            (offer_registry_connection, "findServices"
              , giop::sequence[giop::string & giop::string]
              , fusion::make_vector(first->search_properties)
              , busid, login_info.id, key);
         
-        search_offer(bus_socket, io_service, access_control_object_key
-                     , offer_registry_object_key, busid, *session, login_info.id, key
-                     , *first);
+        search_offer(access_control_connection, offer_registry_connection, io_service
+                     , busid, *session, login_info.id, key, *first);
       }
     }
 
@@ -460,9 +395,8 @@ int main(int argc, char** argv)
         {
           std::cout << "Search again" << std::endl;
           
-          search_offer(bus_socket, io_service, access_control_object_key
-                       , offer_registry_object_key, busid, *session, login_info.id, key
-                       , *offer_first);
+          search_offer(access_control_connection, offer_registry_connection, io_service
+                       , busid, *session, login_info.id, key, *offer_first);
         }
       }
 
@@ -472,7 +406,7 @@ int main(int argc, char** argv)
         bus_socket.async_read_some(boost::asio::null_buffers()
                                    , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read)
                                                  , boost::ref(bus_socket)));
-      }      
+      }
     }
     while(true);
   }

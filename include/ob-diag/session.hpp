@@ -19,7 +19,7 @@ struct session
 {
   session(std::string const& remote_id
           , boost::uint_t<32u>::least session_number
-          , std::vector<char> secret)
+          , std::vector<char> const& secret)
     : remote_id(remote_id), session_number(session_number)
     , secret(secret), ticket(0u) {}
 

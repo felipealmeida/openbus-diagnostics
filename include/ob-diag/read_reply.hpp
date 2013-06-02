@@ -10,6 +10,7 @@
 
 #include <ob-diag/service_context_list.hpp>
 #include <ob-diag/system_exception.hpp>
+#include <ob-diag/reference_connection.hpp>
 
 #include <morbid/giop/forward_back_insert_iterator.hpp>
 #include <morbid/giop/grammars/arguments.hpp>
@@ -124,6 +125,14 @@ void read_reply(boost::asio::ip::tcp::socket& socket
                , "A user exception was thrown! " << e->exception_id)
 
   out = boost::get<Out>(variant_attr);
+}
+
+template <typename OutGrammar, typename Out>
+void read_reply(reference_connection const& ref_c
+                , OutGrammar const& out_grammar
+                , Out& out)
+{
+  read_reply(*ref_c.socket, out_grammar, out);
 }
 
 }
