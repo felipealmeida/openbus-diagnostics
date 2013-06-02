@@ -196,7 +196,7 @@ void search_offer(boost::asio::ip::tcp::socket& bus_socket
 
       read_reply(*oi.offers.back().socket, giop::bool_, non_existent);
 
-      OB_DIAG_ERROR(non_existent, "ORB complained that object doesn't exist");
+      OB_DIAG_ERR(non_existent, "ORB complained that object doesn't exist");
     }
             
     break;
