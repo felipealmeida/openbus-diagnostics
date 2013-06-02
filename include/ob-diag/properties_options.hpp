@@ -9,6 +9,7 @@
 #define OB_DIAG_PROPERTIES_OPTIONS_HPP
 
 #include <boost/program_options.hpp>
+#include <boost/algorithm/string.hpp>
 
 namespace ob_diag {
 
@@ -28,13 +29,19 @@ void validate(boost::any& any
 
   properties_options r;
 
-  std::string::iterator equal_sign = std::find(v.begin(), v.end(), '=');
-  if(equal_sign != v.end())
-    r.properties.push_back(std::make_pair(std::string(v.begin(), equal_sign)
-                                          , std::string(boost::next(equal_sign), v.end())));
-  else
-    r.properties.push_back(std::make_pair(std::string(v.begin(), equal_sign), std::string()));
+  std::vector<std::string> tokens;
+  boost::algorithm::split(tokens, v, boost::algorithm::is_space());
 
+  for(std::vector<std::string>::const_iterator first = tokens.begin()
+        , last = tokens.end(); first != last; ++first)
+  {
+    std::string::const_iterator equal_sign = std::find(first->begin(), first->end(), '=');
+    if(equal_sign != first->end())
+      r.properties.push_back(std::make_pair(std::string(first->begin(), equal_sign)
+                                            , std::string(boost::next(equal_sign), first->end())));
+    else
+      r.properties.push_back(std::make_pair(std::string(first->begin(), equal_sign), std::string()));
+  }
   any = r;
 }
 
