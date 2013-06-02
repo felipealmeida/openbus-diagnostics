@@ -45,6 +45,21 @@ void make_call(reference_connection const& ref_c
 }
 
 template <typename ArgsGrammar, typename Args, typename OutGrammar, typename Out>
+void make_openbus_call_wo_chain(reference_connection const& ref_c
+                                , std::string const& method
+                                , ArgsGrammar const& args_grammar
+                                , Args const& args
+                                , OutGrammar const& out_grammar
+                                , Out& out
+                                , session& remote_session
+                                , std::string const& bus_id
+                                , std::string const& local_id)
+{
+  ob_diag::make_openbus_request(ref_c, method, args_grammar, args, bus_id, local_id, remote_session);
+  ob_diag::read_reply(ref_c, out_grammar, out);
+}
+
+template <typename ArgsGrammar, typename Args, typename OutGrammar, typename Out>
 void make_openbus_call(reference_connection const& ref_c
                        , std::string const& method
                        , ArgsGrammar const& args_grammar
@@ -57,14 +72,13 @@ void make_openbus_call(reference_connection const& ref_c
                        , std::string const& local_id
                        , session& bus_session)
 {
-  make_openbus_request(acs_connection, "signChainFor"
-                       , giop::string, fusion::make_vector(remote_session.remote_id)
-                       , bus_id, local_id, bus_session);
   fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> > signed_call_chain;
-  read_reply(acs_connection
-             , spirit::repeat(256u)[giop::octet]
-             & giop::sequence[giop::octet]
-             , signed_call_chain);
+  make_openbus_call_wo_chain(acs_connection, "signChainFor"
+                             , giop::string, fusion::make_vector(remote_session.remote_id)
+                             , spirit::repeat(256u)[giop::octet]
+                             & giop::sequence[giop::octet]
+                             , signed_call_chain
+                             , bus_session, bus_id, local_id);
 
   ob_diag::make_openbus_request(ref_c, method, args_grammar, args, bus_id, local_id, remote_session, signed_call_chain);
   ob_diag::read_reply(ref_c, out_grammar, out);

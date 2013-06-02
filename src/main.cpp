@@ -90,7 +90,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   }
 }
 
- void wait_offer_error(boost::system::error_code ec, std::size_t size
+void wait_offer_error(boost::system::error_code ec, std::size_t size
                        , ob_diag::offer_info& oi
                        , std::vector<ob_diag::offer_info::offer>::iterator offer_iter
                        , ob_diag::reference_connection& bus_connection
@@ -117,6 +117,32 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
     offer_iter->offer_properties.clear();
     offer_iter->offer_ref = boost::none;
   }
+}
+
+void renew_login_info(boost::system::error_code ec
+                      , ob_diag::reference_connection const& acs_connection
+                      , ob_diag::session& session
+                      , ::login_info& login_info
+                      , std::string const& busid
+                      , boost::asio::steady_timer& timer)
+{
+  OB_DIAG_FAIL(ec, "Failed waiting for renewing login to Openbus");
+
+  std::cout << "Renewing login" << std::endl;
+
+  long new_validity_time;
+  make_openbus_call_wo_chain(acs_connection
+                             , "renew"
+                             , spirit::eps, fusion::vector0<>()
+                             , giop::ulong_, new_validity_time
+                             , session
+                             , busid, login_info.id);
+
+  std::cout << "Renewed login with " << new_validity_time << "s validity time" << std::endl;
+  timer.expires_from_now(boost::chrono::seconds(new_validity_time - 30));
+  timer.async_wait(boost::bind(&renew_login_info, _1, boost::ref(acs_connection)
+                               , boost::ref(session), boost::ref(login_info)
+                               , busid, boost::ref(timer)));
 }
 
 int main(int argc, char** argv)
@@ -209,6 +235,7 @@ int main(int argc, char** argv)
     ob_diag::reference_connection access_control_connection
       = ob_diag::create_connection_ref(fusion::at_c<1>(attr), io_service);
 
+    boost::asio::steady_timer renew_timer(io_service);
     boost::optional<ob_diag::session> session;
     std::vector<ob_diag::offer_info> tracking_offers;
     std::string busid;
@@ -305,6 +332,18 @@ int main(int argc, char** argv)
 
       std::cout << "Succesfully logged in. LoginInfo.id is " << login_info.id << std::endl;
 
+      OB_DIAG_FAIL(login_info.validity_time <= 30
+                   , "Validity time of login is inferior than 30 seconds. Raise the timeout to avoid instabilities")
+
+      std::cout << "Will renew login in " << (login_info.validity_time - 30) << " seconds" << std::endl;
+
+      session = ob_diag::create_session(access_control_connection, "renew", spirit::eps
+                                        , fusion::vector0<>(), busid, login_info.id, key);
+
+      renew_timer.expires_from_now(boost::chrono::seconds(login_info.validity_time - 30));
+      renew_timer.async_wait(boost::bind(&renew_login_info, _1, boost::ref(access_control_connection)
+                                         , boost::ref(*session), boost::ref(login_info)
+                                         , busid, boost::ref(renew_timer)));
       
       {
         reference_types reference_types_;
@@ -335,13 +374,6 @@ int main(int argc, char** argv)
             , last = tracking_offers.end()
             ;first != last; ++first)
       {
-        if(!session)
-          session = ob_diag::create_session
-            (offer_registry_connection, "findServices"
-             , giop::sequence[giop::string & giop::string]
-             , fusion::vector1<std::vector<std::pair<std::string, std::string> > >()
-             , busid, login_info.id, key);
-        
         search_offer(access_control_connection, offer_registry_connection, io_service
                      , busid, *session, login_info.id, key, *first);
       }

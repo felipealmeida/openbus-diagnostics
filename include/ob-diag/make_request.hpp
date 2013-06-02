@@ -124,6 +124,7 @@ void make_openbus_request(boost::asio::ip::tcp::socket& socket
                           (std::vector<unsigned char>(256u), std::vector<unsigned char>()))
 {
   assert(s.secret.size() == 16u);
+  assert(fusion::at_c<0>(signed_call_chain).size() == 256);
 
   std::vector<char> hash(32u);
   {
