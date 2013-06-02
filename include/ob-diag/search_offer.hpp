@@ -31,10 +31,11 @@ struct offer_info
 
   struct offer
   {
-    boost::shared_ptr<boost::asio::ip::tcp::socket> socket;
     boost::optional<reference_types::reference_attribute_type> offered_service_ref;
     std::vector<fusion::vector2<std::string, std::string> > offer_properties;
     boost::optional<reference_types::reference_attribute_type> offer_ref;
+
+    boost::optional<reference_connection> ref_connection;
   };
 
   std::vector<offer> offers;
@@ -97,28 +98,23 @@ void search_offer(reference_connection const& access_control_connection
       offer.offer_properties = fusion::at_c<1>(offers[0]);
       offer.offer_ref = fusion::at_c<2>(offers[0]);
 
-      reference_connection ref_connection;
       try
       {
-        ref_connection = create_connection_ref(fusion::at_c<1>(*offer.offered_service_ref), io_service);
+        offer.ref_connection = create_connection_ref(fusion::at_c<1>(*offer.offered_service_ref), io_service);
       }
       catch(require_error const&)
       {
         continue;
       }
 
-      oi.offers.push_back(offer);
       
       std::cout << "Creating session to service" << std::endl;
 
       ob_diag::session session = ob_diag::create_session
-        (ref_connection, "_non_existent"
-         , spirit::eps
-         , fusion::vector0<>()
-         , busid, login_info_id, key);
+        (*offer.ref_connection, busid, login_info_id, key);
 
       bool non_existent;
-      make_openbus_call(ref_connection, "_non_existent"
+      make_openbus_call(*offer.ref_connection, "_non_existent"
                         , spirit::eps, fusion::vector0<>()
                         , giop::bool_, non_existent
                         , session
@@ -126,7 +122,9 @@ void search_offer(reference_connection const& access_control_connection
                         , busid, login_info_id
                         , bus_session);
 
-      OB_DIAG_ERR(non_existent, "ORB complained that object doesn't exist");
+      OB_DIAG_ERR(non_existent, "Service complained that object doesn't exist");
+
+      oi.offers.push_back(offer);
     }
             
     break;

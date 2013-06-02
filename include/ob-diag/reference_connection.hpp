@@ -21,6 +21,11 @@ struct reference_connection
   std::vector<char> object_key;
 };
 
+inline bool operator==(reference_connection const& lhs, reference_connection const& rhs)
+{
+  return lhs.socket == rhs.socket && lhs.object_key == rhs.object_key;
+}
+
 }
 
 #endif

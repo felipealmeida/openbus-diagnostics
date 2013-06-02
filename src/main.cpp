@@ -103,7 +103,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   if(!ec)
   {
     boost::asio::socket_base::bytes_readable command(true);
-    offer_iter->socket->io_control(command);
+    offer_iter->ref_connection->socket->io_control(command);
     std::size_t bytes_readable = command.get();
     std::cout << "bytes readable " << bytes_readable << std::endl;
     OB_DIAG_ERR (bytes_readable == 0, "Connection was gracefully closed")
@@ -112,7 +112,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   if(redo_connection)
   {
     std::cout << "Should redo connection" << std::endl;
-    offer_iter->socket.reset();
+    offer_iter->ref_connection = boost::none;
     offer_iter->offered_service_ref = boost::none;
     offer_iter->offer_properties.clear();
     offer_iter->offer_ref = boost::none;
@@ -339,7 +339,7 @@ int main(int argc, char** argv)
           session = ob_diag::create_session
             (offer_registry_connection, "findServices"
              , giop::sequence[giop::string & giop::string]
-             , fusion::make_vector(first->search_properties)
+             , fusion::vector1<std::vector<std::pair<std::string, std::string> > >()
              , busid, login_info.id, key);
         
         search_offer(access_control_connection, offer_registry_connection, io_service
@@ -363,8 +363,8 @@ int main(int argc, char** argv)
             ;first != last;++first)
       {
         assert(!!session);
-        if(first->socket)
-          first->socket->async_read_some
+        if(first->ref_connection)
+          first->ref_connection->socket->async_read_some
             (boost::asio::null_buffers()
              , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
                            , boost::ref(first)
@@ -387,7 +387,7 @@ int main(int argc, char** argv)
             , offer_last = tracking_offers.end()
             ; offer_first != offer_last; ++offer_first)
       {
-        if(offer_first->offers.empty() || !offer_first->offers[0].socket)
+        if(offer_first->offers.empty() || !offer_first->offers[0].ref_connection)
         {
           std::cout << "Search again" << std::endl;
           

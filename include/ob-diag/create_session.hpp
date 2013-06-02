@@ -58,14 +58,14 @@ session create_session(boost::asio::ip::tcp::socket& socket
   system_exception ex = read_system_exception(socket, service_context);
 
   OB_DIAG_FAIL(service_context.size() == 0
-               , "System exception thrown doesn't contain any ServiceContext. Can't create session.")
+               , "System exception " << ex.exception_id << " thrown doesn't contain any ServiceContext. Can't create session.")
   
   OB_DIAG_FAIL(ex.exception_id != "IDL:omg.org/CORBA/NO_PERMISSION:1.0"
                , "System exception thrown is " << ex.exception_id
                << ". Expecting \"IDL:omg.org/CORBA/NO_PERMISSION:1.0\" exception")
 
   OB_DIAG_FAIL(ex.minor_code_value != 0x42555300
-               , "Minor code of system exception thrown is " << ex.minor_code_value
+               , "Minor code of system exception " << ex.exception_id << " thrown is " << ex.minor_code_value
                << ". Expecting 0x42555300 in exception")
 
   OB_DIAG_FAIL(fusion::at_c<0u>(service_context[0]) != 0x42555300
@@ -105,6 +105,25 @@ session create_session(boost::asio::ip::tcp::socket& socket
                  , fusion::at_c<1u>(credential_reset), secret);
 }
 
+session create_session(boost::asio::ip::tcp::socket& socket
+                       , std::vector<char> const& object_key
+                       , std::string const& bus_id
+                       , std::string const& login_id
+                       , EVP_PKEY* key)
+{
+  return create_session(socket, object_key, "_non_existent"
+                        , spirit::eps, fusion::vector0<>()
+                        , bus_id, login_id, key);
+}
+
+inline session create_session(reference_connection const& ref_c
+                              , std::string const& bus_id
+                              , std::string const& login_id
+                              , EVP_PKEY* key)
+{
+  return create_session(*ref_c.socket, ref_c.object_key, bus_id, login_id, key);
+}
+
 template <typename ArgsGrammar, typename Args>
 session create_session(reference_connection const& ref_c
                        , std::string const& method
@@ -114,7 +133,8 @@ session create_session(reference_connection const& ref_c
                        , std::string const& login_id
                        , EVP_PKEY* key)
 {
-  return create_session(*ref_c.socket, ref_c.object_key, method, args_grammar, args, bus_id, login_id, key);
+  return create_session(*ref_c.socket, ref_c.object_key, method
+                        , args_grammar, args, bus_id, login_id, key);
 }
 
 }
