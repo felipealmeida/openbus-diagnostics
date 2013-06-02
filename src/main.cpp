@@ -123,12 +123,15 @@ int main(int argc, char** argv)
   try
   {
     boost::program_options::options_description desc("Allowed options");
+    std::string hostname;
+    unsigned short port;
+
     {
       using boost::program_options::value;
       desc.add_options()
         ("help", "Shows this message")
-        ("host,h", value<std::string>(), "Hostname of Openbus")
-        ("port,p", value<unsigned short>(), "Port of Openbus")
+        ("host,h", value<std::string>(&hostname), "Hostname of Openbus")
+        ("port,p", value<unsigned short>(&port)->default_value(2089), "Port of Openbus (default: 2089)")
         ("username", value<std::string>(), "Username for authentication")
         ("password", value<std::string>(), "Password for authentatication")
         ("track-offer", value<std::vector<ob_diag::properties_options> >()
@@ -141,18 +144,18 @@ int main(int argc, char** argv)
                                 , vm);
     boost::program_options::notify(vm);
 
-    if(vm.count("help") || !vm.count("host")
-       || !vm.count("port") || !vm.count("username")
-       || !vm.count("password"))
+    if(vm.count("help") || !vm.count("host"))
     {
       std::cout << desc << std::endl;
       return 1;
     }
-
-    std::string hostname = vm["host"].as<std::string>();
-    unsigned short port = vm["port"].as<unsigned short>();
-    std::string username = vm["username"].as<std::string>()
-      , password = vm["password"].as<std::string>();
+    if((!vm.count("username") || !vm.count("password"))
+       && vm.count("track-offer"))
+    {
+      std::cout << "If you use --track-offer option, you must offer credentials (--username/--password) for login" << std::endl;
+      std::cout << desc << std::endl;
+      return 1;
+    }
 
     boost::asio::io_service io_service;
     boost::asio::ip::tcp::socket bus_socket(io_service, boost::asio::ip::tcp::endpoint());
@@ -238,156 +241,157 @@ int main(int argc, char** argv)
     OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
                     , "Connection to hostname and port of bus failed with error: " << ec.message())
 
-    std::string busid;
-
-    // Reading busid attribute
-    ob_diag::make_request(bus_socket, access_control_object_key
-                          , "_get_busid", spirit::eps, fusion::vector0<>());
-
-    ob_diag::read_reply(bus_socket, giop::string, busid);
-
-    // Reading buskey attribute
-    ob_diag::make_request(bus_socket, access_control_object_key
-                          , "_get_buskey", spirit::eps, fusion::vector0<>());
-
-    typedef std::vector<unsigned char> buskey_args_type;
-    buskey_args_type buskey_args;
-    ob_diag::read_reply(bus_socket, giop::sequence[giop::octet], buskey_args);
-
-    std::cout << "Returned encoded buskey public key with size " << buskey_args.size() << std::endl;
-
-    EVP_PKEY* bus_key;
-    {
-      unsigned char const* buf = &buskey_args[0];
-      bus_key = d2i_PUBKEY(0, &buf, buskey_args.size());
-    }
-
-    OB_DIAG_REQUIRE(bus_key != 0, "Read public key succesfully"
-                    , "Reading public key failed. This is a bug in the diagnostic or a bug in OpenBus")
-
-    EVP_PKEY* key = 0;
-    {
-      EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, 0);
-      int r = EVP_PKEY_keygen_init(ctx);
-      assert(r == 1);
-      r = EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048);
-      assert(r == 1);
-      r = EVP_PKEY_keygen(ctx, &key);
-      assert((r == 1) && key);
-    }
-      
-    std::vector<unsigned char> password_vector(password.begin(), password.end());
-    std::vector<unsigned char> public_key_hash(32);
-    std::vector<unsigned char> public_key_buffer;
-
-    {
-      unsigned char* key_buffer = 0;
-      std::size_t len = i2d_PUBKEY(key, &key_buffer);
-      SHA256(key_buffer, len, &public_key_hash[0]);
-      public_key_buffer.insert(public_key_buffer.end(), key_buffer, key_buffer + len);
-    }
-
-    std::vector<unsigned char> encrypted_block;
-
-    {
-      std::vector<unsigned char> block;
-      typedef giop::forward_back_insert_iterator<std::vector<unsigned char> > output_iterator_type;
-      output_iterator_type iterator(block);
-      bool g = karma::generate(iterator, giop::compile<iiop::generator_domain>
-                               (giop::endianness(giop::native_endian)
-                                [+giop::octet & giop::sequence[giop::octet] ]
-                               )
-                               , fusion::make_vector(public_key_hash, password_vector));
-      
-      OB_DIAG_REQUIRE(g, "Generated buffer data to be transmitted encrypted to the Openbus " << block.size() << " bytes"
-                      , "Failed generating buffer data to be encrypted. This is a bug in the diagnostic tool")
-
-      {
-        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(bus_key, 0);
-        assert(!!ctx);
-        int r = EVP_PKEY_encrypt_init(ctx);
-        assert(r == 1);
-        std::size_t encrypted_size = 0;
-        r = EVP_PKEY_encrypt(ctx, 0, &encrypted_size, &block[0], block.size());
-        assert(r == 1);
-        encrypted_block.resize(encrypted_size);
-        r = EVP_PKEY_encrypt(ctx, &encrypted_block[0], &encrypted_size
-                             , &block[0], block.size());
-
-        std::cout << "Encrypted Block size: " << encrypted_block.size() << std::endl;
-      }
-        
-    }
-
-    ob_diag::make_request(bus_socket, access_control_object_key
-                          , "loginByPassword"
-                          , giop::string
-                          & giop::sequence[giop::octet]
-                          & +giop::octet
-                          , fusion::make_vector(username, public_key_buffer, encrypted_block));
-
-    ::login_info login_info;
-    ob_diag::read_reply(bus_socket, giop::string & giop::string & giop::ulong_, login_info);
-
-    std::cout << "Succesfully logged in. LoginInfo.id is " << login_info.id << std::endl;
-
-    std::vector<char> offer_registry_object_key;
-
-    {
-      ob_diag::make_request(bus_socket, openbus_object_key, "getFacet"
-                            , giop::string
-                            , fusion::make_vector
-                            (std::string("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")));
-
-      typedef std::vector<char>::iterator iterator_type;
-      typedef ob_diag::reference_types<iterator_type> reference_types;
-      reference_types reference_types_;
-      typedef reference_types::reference_attribute_type arguments_attribute_type;
-
-      arguments_attribute_type attr;
-      ob_diag::read_reply(bus_socket, reference_types_.reference_grammar_, attr);
-
-      OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")
-                      , "Found reference for OfferRegistry for OpenBus"
-                      , "Expected reference for OfferRegistry, found instead reference to " << fusion::at_c<0u>(attr))
-
-      bool has_iiop_profile = false;
-      typedef std::vector
-        <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
-                        , ior::tagged_profile> > profiles_type;
-      for(profiles_type::const_iterator first = fusion::at_c<1u>(attr).begin()
-            , last = fusion::at_c<1u>(attr).end(); first != last; ++first)
-      {
-        if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
-        {
-          std::cout << "IIOP Profile Body" << std::endl;
-          ob_diag::create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
-          if(offer_registry_object_key.empty())
-            offer_registry_object_key = fusion::at_c<2u>(*p);
-          has_iiop_profile = true;
-        }
-        else if(reference_types::profile_body_1_1_attr const* p
-                = boost::get<reference_types::profile_body_1_1_attr>(&*first))
-        {
-          std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
-          ob_diag::create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
-          if(offer_registry_object_key.empty())
-            offer_registry_object_key = fusion::at_c<3u>(*p);
-          has_iiop_profile = true;
-        }
-        else
-        {
-          std::cout << "Other Tagged Profiles" << std::endl;
-        }
-      }
-
-      OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
-    }
-
     boost::optional<ob_diag::session> session;
     std::vector<ob_diag::offer_info> tracking_offers;
+    std::string busid;
+    std::vector<char> offer_registry_object_key;
+    ::login_info login_info;
+    EVP_PKEY* key = 0;
     if(vm.count("track-offer") > 0)
     {
+      // Reading busid attribute
+      ob_diag::make_request(bus_socket, access_control_object_key
+                            , "_get_busid", spirit::eps, fusion::vector0<>());
+      
+      ob_diag::read_reply(bus_socket, giop::string, busid);
+
+      // Reading buskey attribute
+      ob_diag::make_request(bus_socket, access_control_object_key
+                            , "_get_buskey", spirit::eps, fusion::vector0<>());
+
+      typedef std::vector<unsigned char> buskey_args_type;
+      buskey_args_type buskey_args;
+      ob_diag::read_reply(bus_socket, giop::sequence[giop::octet], buskey_args);
+
+      std::cout << "Returned encoded buskey public key with size " << buskey_args.size() << std::endl;
+
+      EVP_PKEY* bus_key;
+      {
+        unsigned char const* buf = &buskey_args[0];
+        bus_key = d2i_PUBKEY(0, &buf, buskey_args.size());
+      }
+      
+      OB_DIAG_REQUIRE(bus_key != 0, "Read public key succesfully"
+                      , "Reading public key failed. This is a bug in the diagnostic or a bug in OpenBus")
+
+      {
+        EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, 0);
+        int r = EVP_PKEY_keygen_init(ctx);
+        assert(r == 1);
+        r = EVP_PKEY_CTX_set_rsa_keygen_bits(ctx, 2048);
+        assert(r == 1);
+        r = EVP_PKEY_keygen(ctx, &key);
+        assert((r == 1) && key);
+      }
+      
+      std::string username = vm["username"].as<std::string>()
+        , password = vm["password"].as<std::string>();
+
+      std::vector<unsigned char> password_vector(password.begin(), password.end());
+      std::vector<unsigned char> public_key_hash(32);
+      std::vector<unsigned char> public_key_buffer;
+
+      {
+        unsigned char* key_buffer = 0;
+        std::size_t len = i2d_PUBKEY(key, &key_buffer);
+        SHA256(key_buffer, len, &public_key_hash[0]);
+        public_key_buffer.insert(public_key_buffer.end(), key_buffer, key_buffer + len);
+      }
+
+      std::vector<unsigned char> encrypted_block;
+
+      {
+        std::vector<unsigned char> block;
+        typedef giop::forward_back_insert_iterator<std::vector<unsigned char> > output_iterator_type;
+        output_iterator_type iterator(block);
+        bool g = karma::generate(iterator, giop::compile<iiop::generator_domain>
+                                 (giop::endianness(giop::native_endian)
+                                  [+giop::octet & giop::sequence[giop::octet] ]
+                                 )
+                                 , fusion::make_vector(public_key_hash, password_vector));
+      
+        OB_DIAG_REQUIRE(g, "Generated buffer data to be transmitted encrypted to the Openbus " << block.size() << " bytes"
+                        , "Failed generating buffer data to be encrypted. This is a bug in the diagnostic tool")
+
+        {
+          EVP_PKEY_CTX* ctx = EVP_PKEY_CTX_new(bus_key, 0);
+          assert(!!ctx);
+          int r = EVP_PKEY_encrypt_init(ctx);
+          assert(r == 1);
+          std::size_t encrypted_size = 0;
+          r = EVP_PKEY_encrypt(ctx, 0, &encrypted_size, &block[0], block.size());
+          assert(r == 1);
+          encrypted_block.resize(encrypted_size);
+          r = EVP_PKEY_encrypt(ctx, &encrypted_block[0], &encrypted_size
+                               , &block[0], block.size());
+
+          std::cout << "Encrypted Block size: " << encrypted_block.size() << std::endl;
+        }
+      }
+
+      ob_diag::make_request(bus_socket, access_control_object_key
+                            , "loginByPassword"
+                            , giop::string
+                            & giop::sequence[giop::octet]
+                            & +giop::octet
+                            , fusion::make_vector(username, public_key_buffer, encrypted_block));
+
+      ob_diag::read_reply(bus_socket, giop::string & giop::string & giop::ulong_, login_info);
+
+      std::cout << "Succesfully logged in. LoginInfo.id is " << login_info.id << std::endl;
+
+      
+      {
+        ob_diag::make_request(bus_socket, openbus_object_key, "getFacet"
+                              , giop::string
+                              , fusion::make_vector
+                              (std::string("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")));
+
+        typedef std::vector<char>::iterator iterator_type;
+        typedef ob_diag::reference_types<iterator_type> reference_types;
+        reference_types reference_types_;
+        typedef reference_types::reference_attribute_type arguments_attribute_type;
+
+        arguments_attribute_type attr;
+        ob_diag::read_reply(bus_socket, reference_types_.reference_grammar_, attr);
+
+        OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")
+                        , "Found reference for OfferRegistry for OpenBus"
+                        , "Expected reference for OfferRegistry, found instead reference to " << fusion::at_c<0u>(attr))
+
+        bool has_iiop_profile = false;
+        typedef std::vector
+          <boost::variant<iiop::profile_body, reference_types::profile_body_1_1_attr
+                          , ior::tagged_profile> > profiles_type;
+        for(profiles_type::const_iterator first = fusion::at_c<1u>(attr).begin()
+              , last = fusion::at_c<1u>(attr).end(); first != last; ++first)
+        {
+          if(iiop::profile_body const* p = boost::get<iiop::profile_body>(&*first))
+          {
+            std::cout << "IIOP Profile Body" << std::endl;
+            ob_diag::create_connection(fusion::at_c<0u>(*p), fusion::at_c<1u>(*p), io_service);
+            if(offer_registry_object_key.empty())
+              offer_registry_object_key = fusion::at_c<2u>(*p);
+            has_iiop_profile = true;
+          }
+          else if(reference_types::profile_body_1_1_attr const* p
+                  = boost::get<reference_types::profile_body_1_1_attr>(&*first))
+          {
+            std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
+            ob_diag::create_connection(fusion::at_c<1u>(*p), fusion::at_c<2u>(*p), io_service);
+            if(offer_registry_object_key.empty())
+              offer_registry_object_key = fusion::at_c<3u>(*p);
+            has_iiop_profile = true;
+          }
+          else
+          {
+            std::cout << "Other Tagged Profiles" << std::endl;
+          }
+        }
+
+        OB_DIAG_FAIL(!has_iiop_profile, "IOR has no IIOP Profile bodies. Can't communicate with TCP")
+      }
+
       std::vector<ob_diag::properties_options> search_tracking_offers
         = vm["track-offer"].as<std::vector<ob_diag::properties_options> >();
       tracking_offers.resize(search_tracking_offers.size());
@@ -411,9 +415,6 @@ int main(int argc, char** argv)
                      , offer_registry_object_key, busid, *session, login_info.id, key
                      , *first);
       }
-    }
-    else
-    {
     }
 
     std::cout << "will wait for any changes" << std::endl;
