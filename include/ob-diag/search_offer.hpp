@@ -16,6 +16,7 @@
 #include <ob-diag/reference_types.hpp>
 #include <ob-diag/properties_options.hpp>
 #include <ob-diag/create_connection.hpp>
+#include <ob-diag/make_call.hpp>
 
 #include <boost/asio.hpp>
 
@@ -116,30 +117,14 @@ void search_offer(reference_connection const& access_control_connection
          , fusion::vector0<>()
          , busid, login_info_id, key);
 
-      std::cout << "SignChainFor" << std::endl;
-
-      make_openbus_request(access_control_connection, "signChainFor"
-                           , giop::string, fusion::make_vector(session.remote_id)
-                           , busid, login_info_id, bus_session);
-
-      std::cout << "reading reply" << std::endl;
-
-      fusion::vector2<std::vector<unsigned char>, std::vector<unsigned char> >
-        signed_call_chain;
-      read_reply(access_control_connection
-                 , spirit::repeat(256u)[giop::octet]
-                 & giop::sequence[giop::octet]
-                 , signed_call_chain);
-
-      std::cout << "Making actual call" << std::endl;
-
       bool non_existent;
-      make_openbus_request(ref_connection, "_non_existent"
-                           , spirit::eps, fusion::vector0<>()
-                           , busid, login_info_id, session
-                           , signed_call_chain);
-
-      read_reply(ref_connection, giop::bool_, non_existent);
+      make_openbus_call(ref_connection, "_non_existent"
+                        , spirit::eps, fusion::vector0<>()
+                        , giop::bool_, non_existent
+                        , session
+                        , access_control_connection
+                        , busid, login_info_id
+                        , bus_session);
 
       OB_DIAG_ERR(non_existent, "ORB complained that object doesn't exist");
     }

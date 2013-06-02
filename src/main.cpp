@@ -14,6 +14,7 @@
 #include <ob-diag/reference_types.hpp>
 #include <ob-diag/properties_options.hpp>
 #include <ob-diag/create_connection.hpp>
+#include <ob-diag/make_call.hpp>
 
 #include <morbid/giop/forward_back_insert_iterator.hpp>
 #include <morbid/giop/grammars/arguments.hpp>
@@ -66,7 +67,7 @@ BOOST_FUSION_ADAPT_STRUCT(login_info, (std::string, id)(std::string, entity)
                           (unsigned int, validity_time));
 
 void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
-                    , boost::asio::ip::tcp::socket& socket)
+                    , ob_diag::reference_connection& bus_connection)
 {
   bool redo_connection = ec;
   assert(size == 0);
@@ -76,7 +77,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
   if(!ec)
   {
     boost::asio::socket_base::bytes_readable command(true);
-    socket.io_control(command);
+    bus_connection.socket->io_control(command);
     std::size_t bytes_readable = command.get();
     std::cout << "bytes readable " << bytes_readable << std::endl;
     OB_DIAG_ERR (bytes_readable == 0, "Connection was gracefully closed")
@@ -92,7 +93,7 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
  void wait_offer_error(boost::system::error_code ec, std::size_t size
                        , ob_diag::offer_info& oi
                        , std::vector<ob_diag::offer_info::offer>::iterator offer_iter
-                       , boost::asio::ip::tcp::socket& bus_socket
+                       , ob_diag::reference_connection& bus_connection
                        , ob_diag::session& session)
 {
   bool redo_connection = ec;
@@ -158,7 +159,9 @@ int main(int argc, char** argv)
     }
 
     boost::asio::io_service io_service;
-    boost::asio::ip::tcp::socket bus_socket(io_service, boost::asio::ip::tcp::endpoint());
+    ob_diag::reference_connection bus_connection;
+
+    bus_connection.socket.reset(new boost::asio::ip::tcp::socket(io_service, boost::asio::ip::tcp::endpoint()));
 
     boost::system::error_code ec;
 
@@ -175,30 +178,29 @@ int main(int argc, char** argv)
     boost::asio::ip::tcp::endpoint remote_endpoint = *remote_iterator;
     
     remote_endpoint.port(port);
-    bus_socket.connect(remote_endpoint, ec);
+    bus_connection.socket->connect(remote_endpoint, ec);
 
     OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of bus was successful"
                     , "Connection to hostname and port of bus failed with error: " << ec.message())
-                    
-    std::vector<char> openbus_object_key;
+
     {
       const char openbus_object_key_lit[] = "OpenBus_2_0";
-      openbus_object_key.insert(openbus_object_key.end(), &openbus_object_key_lit[0]
-                                , &openbus_object_key_lit[0] + sizeof(openbus_object_key_lit)-1);
+      bus_connection.object_key.insert(bus_connection.object_key.end()
+                                       , &openbus_object_key_lit[0]
+                                       , &openbus_object_key_lit[0] + sizeof(openbus_object_key_lit)-1);
     }
-
-    ob_diag::make_request(bus_socket, openbus_object_key, "getFacet"
-                          , giop::string
-                          , fusion::make_vector
-                          (std::string("IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")));
 
     typedef std::vector<char>::iterator iterator_type;
     typedef ob_diag::reference_types<iterator_type> reference_types;
-    reference_types reference_types_;
     typedef reference_types::reference_attribute_type arguments_attribute_type;
 
+    reference_types reference_types_;
     arguments_attribute_type attr;
-    ob_diag::read_reply(bus_socket, reference_types_.reference_grammar_, attr);
+
+    ob_diag::make_call(bus_connection, "getFacet", giop::string
+                       , fusion::make_vector
+                       (std::string("IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0"))
+                       , reference_types_.reference_grammar_, attr);
 
     OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/access_control/AccessControl:1.0")
                     , "Found reference for AccessControl for OpenBus"
@@ -216,18 +218,16 @@ int main(int argc, char** argv)
     if(vm.count("track-offer") > 0)
     {
       // Reading busid attribute
-      ob_diag::make_request(access_control_connection
-                            , "_get_busid", spirit::eps, fusion::vector0<>());
-      
-      ob_diag::read_reply(access_control_connection, giop::string, busid);
+      ob_diag::make_call(access_control_connection
+                         , "_get_busid", spirit::eps, fusion::vector0<>()
+                         , giop::string, busid);
 
       // Reading buskey attribute
-      ob_diag::make_request(access_control_connection
-                            , "_get_buskey", spirit::eps, fusion::vector0<>());
-
       typedef std::vector<unsigned char> buskey_args_type;
       buskey_args_type buskey_args;
-      ob_diag::read_reply(access_control_connection, giop::sequence[giop::octet], buskey_args);
+      ob_diag::make_call(access_control_connection
+                         , "_get_buskey", spirit::eps, fusion::vector0<>()
+                         , giop::sequence[giop::octet], buskey_args);
 
       std::cout << "Returned encoded buskey public key with size " << buskey_args.size() << std::endl;
 
@@ -295,31 +295,26 @@ int main(int argc, char** argv)
         }
       }
 
-      ob_diag::make_request(access_control_connection
-                            , "loginByPassword"
-                            , giop::string
-                            & giop::sequence[giop::octet]
-                            & +giop::octet
-                            , fusion::make_vector(username, public_key_buffer, encrypted_block));
-
-      ob_diag::read_reply(access_control_connection, giop::string & giop::string & giop::ulong_, login_info);
+      ob_diag::make_call(access_control_connection
+                         , "loginByPassword"
+                         , giop::string
+                         & giop::sequence[giop::octet]
+                         & +giop::octet
+                         , fusion::make_vector(username, public_key_buffer, encrypted_block)
+                         , giop::string & giop::string & giop::ulong_, login_info);
 
       std::cout << "Succesfully logged in. LoginInfo.id is " << login_info.id << std::endl;
 
       
       {
-        ob_diag::make_request(bus_socket, openbus_object_key, "getFacet"
-                              , giop::string
-                              , fusion::make_vector
-                              (std::string("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")));
-
-        typedef std::vector<char>::iterator iterator_type;
-        typedef ob_diag::reference_types<iterator_type> reference_types;
         reference_types reference_types_;
-        typedef reference_types::reference_attribute_type arguments_attribute_type;
-
         arguments_attribute_type attr;
-        ob_diag::read_reply(bus_socket, reference_types_.reference_grammar_, attr);
+
+        ob_diag::make_call(bus_connection, "getFacet"
+                           , giop::string
+                           , fusion::make_vector
+                           (std::string("IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0"))
+                           , reference_types_.reference_grammar_, attr);
 
         OB_DIAG_REQUIRE((fusion::at_c<0u>(attr) == "IDL:tecgraf/openbus/core/v2_0/services/offer_registry/OfferRegistry:1.0")
                         , "Found reference for OfferRegistry for OpenBus"
@@ -354,8 +349,9 @@ int main(int argc, char** argv)
 
     std::cout << "will wait for any changes" << std::endl;
     bool bus_read = false;
-    bus_socket.async_read_some(boost::asio::null_buffers()
-                               , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read), boost::ref(bus_socket)));
+    bus_connection.socket->async_read_some
+      (boost::asio::null_buffers()
+       , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read), boost::ref(bus_connection)));
 
     for(std::vector<ob_diag::offer_info>::iterator offer_first = tracking_offers.begin()
           , offer_last = tracking_offers.end()
@@ -372,7 +368,7 @@ int main(int argc, char** argv)
             (boost::asio::null_buffers()
              , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
                            , boost::ref(first)
-                           , boost::ref(bus_socket), boost::ref(*session)));
+                           , boost::ref(bus_connection), boost::ref(*session)));
       }
     }
 
@@ -403,9 +399,10 @@ int main(int argc, char** argv)
       if(bus_read)
       {
         bus_read = false;
-        bus_socket.async_read_some(boost::asio::null_buffers()
-                                   , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read)
-                                                 , boost::ref(bus_socket)));
+        bus_connection.socket->async_read_some
+          (boost::asio::null_buffers()
+           , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read)
+                         , boost::ref(bus_connection)));
       }
     }
     while(true);
