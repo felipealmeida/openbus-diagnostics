@@ -41,7 +41,7 @@ boost::shared_ptr<boost::asio::ip::tcp::socket> create_connection(std::string co
   socket->connect(remote_endpoint, ec);
 
   OB_DIAG_REQUIRE(!ec, "Connection to hostname and port of IIOP Profile was succesful"
-                  , "Connection to hostname and port of IIOP Profile was succesful failed with error " << ec.message())
+                  , "Connection to hostname and port of IIOP Profile failed with error " << ec.message())
 
   return socket;
 }
@@ -82,7 +82,7 @@ reference_connection create_connection_ref(profiles_type const& profiles, boost:
     {
       std::cout << "IIOP Profile Body" << std::endl;
       if(boost::optional<reference_connection> r = create_connection_from_seq(*p , io_service))
-        if(!has_iiop_profile)
+        if(!ref_connection.socket)
           ref_connection = *r;
       has_iiop_profile = true;
     }
@@ -92,7 +92,7 @@ reference_connection create_connection_ref(profiles_type const& profiles, boost:
       std::cout << "IIOP Profile Body 1." << (int)fusion::at_c<0u>(*p) << std::endl;
       if(boost::optional<reference_connection> r
          = create_connection_from_seq(boost::fusion::pop_front(*p), io_service))
-        if(!has_iiop_profile)
+        if(!ref_connection.socket)
           ref_connection = *r;
       has_iiop_profile = true;
     }
@@ -101,6 +101,9 @@ reference_connection create_connection_ref(profiles_type const& profiles, boost:
       std::cout << "Other Tagged Profiles" << std::endl;
     }
   }
+
+  OB_DIAG_FAIL(!ref_connection.socket, "No reachable IIOP profile. Service might be down")
+  OB_DIAG_FAIL(!has_iiop_profile, "No IIOP profile. This is a bug in the diagnostic or a bug in the service")
 
   return ref_connection;
 }

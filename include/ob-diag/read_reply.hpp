@@ -91,18 +91,56 @@ void read_reply(boost::asio::ip::tcp::socket& socket
                 //                , service_context_list&)
                 )
 {
-  std::vector<char> reply_buffer(4096);
-  boost::system::error_code ec;
-  std::size_t size = socket.read_some
-    (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
-  reply_buffer.resize(size);
-
-  OB_DIAG_REQUIRE(!ec, "Read reply with " << reply_buffer.size() << " bytes"
-                  ,  "Failed reading with error " << ec.message())
-
+  std::vector<char> reply_buffer(1024*1024);
+  std::size_t offset = 0, size_to_download = 0;
   typedef std::vector<char>::iterator iterator_type;
-  iterator_type first = reply_buffer.begin()
-    ,  last = reply_buffer.end();
+  iterator_type first;
+  bool header_parse = false;
+
+  do
+  {
+    boost::system::error_code ec;
+    std::size_t bytes_read = socket.read_some
+      (boost::asio::mutable_buffers_1(&reply_buffer[offset], reply_buffer.size() - offset), ec);
+    offset += bytes_read;
+
+    OB_DIAG_REQUIRE(!ec, "Read  " << offset << " bytes"
+                    ,  "Failed reading with error " << ec.message())
+
+    if(offset > 12)
+    {
+      first = reply_buffer.begin();
+      fusion::vector2<unsigned char, unsigned int> attribute;
+      header_parse = qi::parse(first, reply_buffer.begin() + offset
+                               , giop::compile<iiop::parser_domain>
+                               ("GIOP"
+                                & giop::octet('\1')
+                                & giop::octet('\0')
+                                & giop::endianness
+                                [
+                                 giop::octet
+                                 & giop::ulong_
+                                ]
+                               )
+                               , attribute);
+      unsigned char message_type = fusion::at_c<0>(attribute);
+      size_to_download = fusion::at_c<1>(attribute);
+      OB_DIAG_FAIL(!header_parse, "Garbage was received as reply or a bug in the diagnostic tool")
+      OB_DIAG_FAIL(message_type != 1, "Message type " << message_type << " was not expected. Expected a GIOP reply message."
+                   " This might be a bug in the diagnostic tool")
+      OB_DIAG_FAIL(std::distance(reply_buffer.begin(), first) + size_to_download > reply_buffer.size()
+                   , "Message is bigger than 1MB, higher than the limit for the diagnostic tool")
+      OB_DIAG_FAIL(std::distance(first, reply_buffer.begin() + offset) > size_to_download
+                   , "Received more data than was expected or a bug in the diagnostic tool")
+    }
+  }
+  while(offset <= 12 
+        || std::distance(first, reply_buffer.begin() + offset) != size_to_download);
+
+  reply_buffer.resize(offset);
+
+  first = reply_buffer.begin();
+  iterator_type last = reply_buffer.end();
 
   typedef reply_types<Out> reply_type;
   reply_type reply(out_grammar);

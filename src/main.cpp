@@ -66,13 +66,13 @@ struct login_info
 BOOST_FUSION_ADAPT_STRUCT(login_info, (std::string, id)(std::string, entity)
                           (unsigned int, validity_time));
 
-void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
-                    , ob_diag::reference_connection& bus_connection)
+void wait_bus_error(boost::system::error_code ec, std::size_t size
+                    , ob_diag::reference_connection& bus_connection
+                    , boost::asio::io_service& io_service)
 {
   bool redo_connection = ec;
   assert(size == 0);
   OB_DIAG_ERR(ec, "Connection closed from bus. Reason: " << ec.message())
-  read = true;
 
   if(!ec)
   {
@@ -88,17 +88,24 @@ void wait_bus_error(boost::system::error_code ec, std::size_t size, bool& read
     std::cout << "Should redo connection to bus" << std::endl;
     OB_DIAG_FAIL (true, "Not implemented yet")
   }
+  else
+    bus_connection.socket->async_read_some
+      (boost::asio::null_buffers()
+       , boost::bind(wait_bus_error, _1, _2
+                     , boost::ref(bus_connection), boost::ref(io_service)));
 }
 
 void wait_offer_error(boost::system::error_code ec, std::size_t size
-                       , ob_diag::offer_info& oi
-                       , std::vector<ob_diag::offer_info::offer>::iterator offer_iter
-                       , ob_diag::reference_connection& bus_connection
-                       , ob_diag::session& session)
+                      , ob_diag::offer_info& oi
+                      , std::list<ob_diag::offer_info::offer>::iterator offer_iter
+                      , ob_diag::reference_connection& bus_connection
+                      , ob_diag::session& session
+                      , boost::asio::io_service& io_service)
 {
   bool redo_connection = ec;
   assert(size == 0);
   OB_DIAG_ERR(ec, "Connection closed from offer. Reason: " << ec.message())
+  std::cout << "wait_offer_error" << std::endl;
 
   if(!ec)
   {
@@ -112,10 +119,12 @@ void wait_offer_error(boost::system::error_code ec, std::size_t size
   if(redo_connection)
   {
     std::cout << "Should redo connection" << std::endl;
-    offer_iter->ref_connection = boost::none;
-    offer_iter->offered_service_ref = boost::none;
-    offer_iter->offer_properties.clear();
-    offer_iter->offer_ref = boost::none;
+    // offer_iter->ref_connection = boost::none;
+    // offer_iter->offered_service_ref = boost::none;
+    // offer_iter->offer_properties.clear();
+    // offer_iter->offer_ref = boost::none;
+    oi.offers.erase(offer_iter);
+    // io_service.stop();
   }
 }
 
@@ -152,7 +161,7 @@ int main(int argc, char** argv)
     boost::program_options::options_description desc("Allowed options");
     std::string hostname;
     unsigned short port;
-
+    unsigned int check_timeout;
     {
       using boost::program_options::value;
       desc.add_options()
@@ -161,6 +170,8 @@ int main(int argc, char** argv)
         ("port,p", value<unsigned short>(&port)->default_value(2089), "Port of Openbus (default: 2089)")
         ("username", value<std::string>(), "Username for authentication")
         ("password", value<std::string>(), "Password for authentatication")
+        ("check-timeout", value<unsigned int>(&check_timeout)->default_value(240)
+         , "How many seconds should it wait to try to recontact offers to test if they are still alive (default: 240)")
         ("track-offer", value<std::vector<ob_diag::properties_options> >()
          , "List of name=value pairs of properties for tracking offers")
         ;
@@ -380,35 +391,34 @@ int main(int argc, char** argv)
     }
 
     std::cout << "will wait for any changes" << std::endl;
-    bool bus_read = false;
     bus_connection.socket->async_read_some
       (boost::asio::null_buffers()
-       , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read), boost::ref(bus_connection)));
+       , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_connection)
+                     , boost::ref(io_service)));
 
     for(std::vector<ob_diag::offer_info>::iterator offer_first = tracking_offers.begin()
           , offer_last = tracking_offers.end()
           ; offer_first != offer_last; ++offer_first)
     {
-      for(std::vector<ob_diag::offer_info::offer>::iterator
+      for(std::list<ob_diag::offer_info::offer>::iterator
             first = offer_first->offers.begin()
             , last = offer_first->offers.end()
             ;first != last;++first)
       {
         assert(!!session);
-        if(first->ref_connection)
-          first->ref_connection->socket->async_read_some
-            (boost::asio::null_buffers()
-             , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
-                           , boost::ref(first)
-                           , boost::ref(bus_connection), boost::ref(*session)));
+        first->ref_connection->socket->async_read_some
+          (boost::asio::null_buffers()
+           , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
+                         , first
+                         , boost::ref(bus_connection), boost::ref(*session)
+                         , boost::ref(io_service)));
       }
     }
 
+    boost::asio::steady_timer timer(io_service);
     do
     {
-
-      boost::asio::steady_timer timer(io_service, boost::chrono::seconds(5));
-      
+      timer.expires_from_now(boost::chrono::seconds(check_timeout));
       timer.async_wait(boost::bind(&boost::asio::io_service::stop, boost::ref(io_service)));
 
       io_service.run();
@@ -419,22 +429,26 @@ int main(int argc, char** argv)
             , offer_last = tracking_offers.end()
             ; offer_first != offer_last; ++offer_first)
       {
-        if(offer_first->offers.empty() || !offer_first->offers[0].ref_connection)
+        if(offer_first->offers.empty())
         {
           std::cout << "Search again" << std::endl;
           
           search_offer(access_control_connection, offer_registry_connection, io_service
                        , busid, *session, login_info.id, key, *offer_first);
+          for(std::list<ob_diag::offer_info::offer>::iterator
+                first = offer_first->offers.begin()
+                , last = offer_first->offers.end()
+                ;first != last;++first)
+          {
+            assert(!!session);
+            first->ref_connection->socket->async_read_some
+              (boost::asio::null_buffers()
+               , boost::bind(wait_offer_error, _1, _2, boost::ref(*offer_first)
+                             , first
+                             , boost::ref(bus_connection), boost::ref(*session)
+                             , boost::ref(io_service)));
+          }
         }
-      }
-
-      if(bus_read)
-      {
-        bus_read = false;
-        bus_connection.socket->async_read_some
-          (boost::asio::null_buffers()
-           , boost::bind(wait_bus_error, _1, _2, boost::ref(bus_read)
-                         , boost::ref(bus_connection)));
       }
     }
     while(true);

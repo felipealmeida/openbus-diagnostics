@@ -38,7 +38,7 @@ struct offer_info
     boost::optional<reference_connection> ref_connection;
   };
 
-  std::vector<offer> offers;
+  std::list<offer> offers;
 
   offer_info(properties_options const& o)
     : search_properties(o.properties) {}
@@ -94,9 +94,9 @@ void search_offer(reference_connection const& access_control_connection
           , offer_last = offers.end();offer_first != offer_last;++offer_first)
     {
       offer_info::offer offer;
-      offer.offered_service_ref = fusion::at_c<0>(offers[0]);
-      offer.offer_properties = fusion::at_c<1>(offers[0]);
-      offer.offer_ref = fusion::at_c<2>(offers[0]);
+      offer.offered_service_ref = fusion::at_c<0>(*offer_first);
+      offer.offer_properties = fusion::at_c<1>(*offer_first);
+      offer.offer_ref = fusion::at_c<2>(*offer_first);
 
       try
       {
@@ -104,6 +104,7 @@ void search_offer(reference_connection const& access_control_connection
       }
       catch(require_error const&)
       {
+        OB_DIAG_ERR(true, "This offer is not reachable through TCP")
         continue;
       }
 

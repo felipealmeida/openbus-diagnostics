@@ -29,7 +29,7 @@ namespace ob_diag {
 system_exception read_system_exception(boost::asio::ip::tcp::socket& socket
                                        , service_context_list& service_context)
 {
-  std::vector<char> reply_buffer(4096);
+  std::vector<char> reply_buffer(4096*1024);
   boost::system::error_code ec;
   std::size_t size = socket.read_some
     (boost::asio::mutable_buffers_1(&reply_buffer[0], reply_buffer.size()), ec);
