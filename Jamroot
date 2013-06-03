@@ -12,6 +12,7 @@ exe openbus-diagnostics
  : src/main.cpp /boost//program_options /boost//chrono /boost//system /morbid//iiop
  /morbid//ior /openssl//openssl
  : <threading>multi <include>include
+ <toolset>gcc:<cxxflags>-Wno-unused-local-typedefs
  ;
 
 install stage : openbus-diagnostics ;
